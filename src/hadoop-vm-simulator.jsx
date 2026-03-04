@@ -25,6 +25,12 @@ function createInitialState() {
     "/datos/namenode/current": { type: "dir", children: ["VERSION", "fsimage_0000000000000000042", "fsimage_0000000000000000042.md5", "edits_inprogress_0000000000000000043"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceID=1234567890\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=NAME_NODE\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-66", "fsimage_0000000000000000042": "[binary fsimage data]", "fsimage_0000000000000000042.md5": "a3f2b8c91d4e5f6a7b8c9d0e1f2a3b4c", "edits_inprogress_0000000000000000043": "[binary edits data]" } },
     "/datos/datanode": { type: "dir", children: ["current"] },
     "/datos/datanode/current": { type: "dir", children: ["VERSION", "BP-1234567890-127.0.0.1-1700000000000"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nstorageID=DS-abc12345-def6-7890-ghij-klmnopqrstuv\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=DATA_NODE\nlayoutVersion=-57" } },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000": { type: "dir", children: ["current", "tmp"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current": { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized": { type: "dir", children: ["subdir0"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0": { type: "dir", children: [] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/rbw": { type: "dir", children: [] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/tmp": { type: "dir", children: [] },
     "/etc": { type: "dir", children: ["hosts", "hostname"], files: { hosts: "127.0.0.1   localhost\n127.0.1.1   hadoop-VirtualBox\n192.168.56.10 hadoop-VirtualBox\n192.168.56.11 nodo2\n192.168.56.12 nodo3", hostname: "hadoop-VirtualBox" } },
     "/var": { type: "dir", children: ["log"] }, "/var/log": { type: "dir", children: ["syslog"] },
     "/usr": { type: "dir", children: ["bin", "lib"] }, "/usr/bin": { type: "dir", children: [] }, "/usr/lib": { type: "dir", children: [] },
@@ -566,6 +572,15 @@ export default function HadoopVMSimulator() {
             const dnVer = "#\n#Mon Jan 01 08:00:00 COT 2026\nstorageID=DS-abc12345-def6-7890-ghij-klmnopqrstuv\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=DATA_NODE\nlayoutVersion=-57";
             if (lfs[nnc] && !lfs[nnc].files?.["VERSION"]) { lfs[nnc] = { ...lfs[nnc], children: ["VERSION", ...(lfs[nnc].children || [])], files: { ...lfs[nnc].files, "VERSION": nnVer } }; }
             if (lfs[dnc] && !lfs[dnc].files?.["VERSION"]) { lfs[dnc] = { ...lfs[dnc], children: ["VERSION", ...(lfs[dnc].children || [])], files: { ...lfs[dnc].files, "VERSION": dnVer } }; }
+            const bp = "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000";
+            if (!lfs[bp]) {
+              lfs[bp] = { type: "dir", children: ["current", "tmp"] };
+              lfs[bp + "/current"] = { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } };
+              lfs[bp + "/current/finalized"] = { type: "dir", children: ["subdir0"] };
+              lfs[bp + "/current/finalized/subdir0"] = { type: "dir", children: [] };
+              lfs[bp + "/current/rbw"] = { type: "dir", children: [] };
+              lfs[bp + "/tmp"] = { type: "dir", children: [] };
+            }
             setLocalFS(lfs);
           } if (s.hdfsFS) setHdfsFS(s.hdfsFS); if (s.cwd) setCwd(s.cwd);
           if (s.history) setHistory(s.history); if (s.services) setServices(s.services); if (s.safeMode) setSafeMode(s.safeMode);
