@@ -787,6 +787,36 @@ export default function HadoopVMSimulator() {
     }
     if (base === "javac") { const f = tokens.find(t => t.endsWith(".java")); if (!f) return [out("javac: no source files", "error")]; const nm = f.replace(".java", ""); let nf = { ...localFS }; if (nf[cwd]) { const cls = [`${nm}.class`, `${nm}$TokenizerMapper.class`, `${nm}$IntSumReducer.class`]; nf[cwd] = { ...nf[cwd], children: [...new Set([...(nf[cwd].children || []), ...cls])], files: { ...(nf[cwd].files || {}), ...Object.fromEntries(cls.map(c => [c, `[bytecode: ${c}]`])) } }; } setLocalFS(nf); return [out(`✓ Compilación exitosa`, "success")]; }
     if (base === "jar" && tokens[1] === "cf") { const jn = tokens[2]; if (!jn) return [out("jar: faltan argumentos", "error")]; let nf = { ...localFS }; if (nf[cwd]) nf[cwd] = { ...nf[cwd], children: [...new Set([...(nf[cwd].children || []), jn])], files: { ...(nf[cwd].files || {}), [jn]: `[JAR: ${jn}]` } }; setLocalFS(nf); return [out(`✓ ${jn} creado`, "success")]; }
+    if (base === "gzip") {
+      const keep = tokens.includes("-k"); const decomp = tokens.includes("-d");
+      const target = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
+      if (!target) return [out("gzip: falta operando", "error")];
+      const r = resolvePath(target, cwd); const nd = getLocalNode(r);
+      if (!nd || nd.type !== "file") return [out(`gzip: ${target}: No existe`, "error")];
+      if (decomp || target.endsWith(".gz")) return processCommand(`gunzip ${target}`);
+      const gzName = target.endsWith(".gz") ? target : target + ".gz";
+      const par = r.substring(0, r.lastIndexOf("/")) || "/"; const nm = r.substring(r.lastIndexOf("/") + 1);
+      let nf = { ...localFS };
+      nf[par] = { ...nf[par], children: [...new Set([...(nf[par].children || []).filter(c => keep || c !== nm), gzName])], files: { ...(nf[par].files || {}), [gzName]: `[gzip compressed: ${nm}]\n${nd.content || ""}` } };
+      if (!keep) { const { [nm]: _, ...rest } = nf[par].files || {}; nf[par] = { ...nf[par], files: rest }; }
+      setLocalFS(nf); return [out(`gzip: ${target} → ${gzName}`, "success")];
+    }
+    if (base === "gunzip") {
+      const keep = tokens.includes("-k");
+      const target = tokens.find((t, i) => i > 0 && !t.startsWith("-"));
+      if (!target) return [out("gunzip: falta operando", "error")];
+      if (!target.endsWith(".gz")) return [out(`gunzip: ${target}: unknown suffix -- ignored`, "error")];
+      const r = resolvePath(target, cwd); const nd = getLocalNode(r);
+      if (!nd || nd.type !== "file") return [out(`gunzip: ${target}: No existe`, "error")];
+      const outName = target.slice(0, -3);
+      const par = r.substring(0, r.lastIndexOf("/")) || "/"; const nm = r.substring(r.lastIndexOf("/") + 1);
+      const rawContent = (nd.content || "").replace(/^\[gzip compressed: [^\]]+\]\n/, "");
+      let nf = { ...localFS };
+      const newChildren = [...new Set([...(nf[par].children || []).filter(c => keep || c !== nm), outName])];
+      nf[par] = { ...nf[par], children: newChildren, files: { ...(nf[par].files || {}), [outName]: rawContent } };
+      if (!keep) { const { [nm]: _, ...rest } = nf[par].files; nf[par] = { ...nf[par], files: rest }; }
+      setLocalFS(nf); return [out(`gunzip: ${target} → ${outName}`, "success")];
+    }
     if (base === "exit") return [out("(Nodo maestro. Usa 'reset' para reiniciar.)", "warn")];
     if (["nano", "vim", "vi", "gedit"].includes(base)) return [out(`(${base} no disponible. Usa echo >> archivo y cat.)`, "warn")];
     if (base === "bash" || base === "sh") { const sp = tokens[1]; if (!sp) return [out(`${base}: falta archivo`, "error")]; const nd = getLocalNode(resolvePath(sp, cwd)); if (!nd || nd.type !== "file") return [out(`${base}: ${sp}: No existe`, "error")]; const sLines = (nd.content || "").split("\n").filter(l => l.trim() && !l.trim().startsWith("#")); const results = []; for (const line of sLines) results.push(...processCommand(line.trim())); return results; }
