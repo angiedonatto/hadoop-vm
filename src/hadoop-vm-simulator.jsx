@@ -559,39 +559,37 @@ export default function HadoopVMSimulator() {
 
   // ── Load from persistent storage ──
   useEffect(() => {
-    (async () => {
-      try {
-        const result = await window.storage.get(STORAGE_KEY);
-        if (result && result.value) {
-          const s = JSON.parse(result.value);
-          if (s.localFS) {
-            // Patch: inject VERSION files if missing (migration)
-            const lfs = s.localFS;
-            const nnc = "/datos/namenode/current"; const dnc = "/datos/datanode/current";
-            const nnVer = "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceID=1234567890\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=NAME_NODE\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-66";
-            const dnVer = "#\n#Mon Jan 01 08:00:00 COT 2026\nstorageID=DS-abc12345-def6-7890-ghij-klmnopqrstuv\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=DATA_NODE\nlayoutVersion=-57";
-            if (lfs[nnc] && !lfs[nnc].files?.["VERSION"]) { lfs[nnc] = { ...lfs[nnc], children: ["VERSION", ...(lfs[nnc].children || [])], files: { ...lfs[nnc].files, "VERSION": nnVer } }; }
-            if (lfs[dnc] && !lfs[dnc].files?.["VERSION"]) { lfs[dnc] = { ...lfs[dnc], children: ["VERSION", ...(lfs[dnc].children || [])], files: { ...lfs[dnc].files, "VERSION": dnVer } }; }
-            const bp = "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000";
-            if (!lfs[bp]) {
-              lfs[bp] = { type: "dir", children: ["current", "tmp"] };
-              lfs[bp + "/current"] = { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } };
-              lfs[bp + "/current/finalized"] = { type: "dir", children: ["subdir0"] };
-              lfs[bp + "/current/finalized/subdir0"] = { type: "dir", children: [] };
-              lfs[bp + "/current/rbw"] = { type: "dir", children: [] };
-              lfs[bp + "/tmp"] = { type: "dir", children: [] };
-            }
-            setLocalFS(lfs);
-          } if (s.hdfsFS) setHdfsFS(s.hdfsFS); if (s.cwd) setCwd(s.cwd);
-          if (s.history) setHistory(s.history); if (s.services) setServices(s.services); if (s.safeMode) setSafeMode(s.safeMode);
-          if (s.hdfsSnapEnabled) setHdfsSnapEnabled(new Set(s.hdfsSnapEnabled)); if (s.hdfsSnapshots) setHdfsSnapshots(s.hdfsSnapshots);
-          if (s.yarnApps) setYarnApps(s.yarnApps); if (s.appCounter) setAppCounter(s.appCounter);
-          if (s.fsimageCounter) setFsimageCounter(s.fsimageCounter); if (s.permsMap) setPermsMap(s.permsMap); if (s.lines) setLines(s.lines);
-          setStorageReady(true); return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.localFS) {
+          const lfs = s.localFS;
+          const nnc = "/datos/namenode/current"; const dnc = "/datos/datanode/current";
+          const nnVer = "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceID=1234567890\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=NAME_NODE\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-66";
+          const dnVer = "#\n#Mon Jan 01 08:00:00 COT 2026\nstorageID=DS-abc12345-def6-7890-ghij-klmnopqrstuv\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=DATA_NODE\nlayoutVersion=-57";
+          if (lfs[nnc] && !lfs[nnc].files?.["VERSION"]) { lfs[nnc] = { ...lfs[nnc], children: ["VERSION", ...(lfs[nnc].children || [])], files: { ...lfs[nnc].files, "VERSION": nnVer } }; }
+          if (lfs[dnc] && !lfs[dnc].files?.["VERSION"]) { lfs[dnc] = { ...lfs[dnc], children: ["VERSION", ...(lfs[dnc].children || [])], files: { ...lfs[dnc].files, "VERSION": dnVer } }; }
+          const bp = "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000";
+          if (!lfs[bp]) {
+            lfs[bp] = { type: "dir", children: ["current", "tmp"] };
+            lfs[bp + "/current"] = { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } };
+            lfs[bp + "/current/finalized"] = { type: "dir", children: ["subdir0"] };
+            lfs[bp + "/current/finalized/subdir0"] = { type: "dir", children: [] };
+            lfs[bp + "/current/rbw"] = { type: "dir", children: [] };
+            lfs[bp + "/tmp"] = { type: "dir", children: [] };
+          }
+          setLocalFS(lfs);
         }
-      } catch {}
-      const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setStorageReady(true);
-    })();
+        if (s.hdfsFS) setHdfsFS(s.hdfsFS); if (s.cwd) setCwd(s.cwd);
+        if (s.history) setHistory(s.history); if (s.services) setServices(s.services); if (s.safeMode) setSafeMode(s.safeMode);
+        if (s.hdfsSnapEnabled) setHdfsSnapEnabled(new Set(s.hdfsSnapEnabled)); if (s.hdfsSnapshots) setHdfsSnapshots(s.hdfsSnapshots);
+        if (s.yarnApps) setYarnApps(s.yarnApps); if (s.appCounter) setAppCounter(s.appCounter);
+        if (s.fsimageCounter) setFsimageCounter(s.fsimageCounter); if (s.permsMap) setPermsMap(s.permsMap); if (s.lines) setLines(s.lines);
+        setStorageReady(true); return;
+      }
+    } catch {}
+    const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setStorageReady(true);
   }, []);
 
   // ── Save (debounced) ──
@@ -599,7 +597,7 @@ export default function HadoopVMSimulator() {
     if (!storageReady || !localFS) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { await window.storage.set(STORAGE_KEY, JSON.stringify({ localFS, hdfsFS, cwd, history: history.slice(0, 100), services, safeMode, hdfsSnapEnabled: [...hdfsSnapEnabled], hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines: lines.slice(-200) })); } catch {}
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ localFS, hdfsFS, cwd, history: history.slice(0, 100), services, safeMode, hdfsSnapEnabled: [...hdfsSnapEnabled], hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines: lines.slice(-200) })); } catch {}
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [localFS, hdfsFS, cwd, history, services, safeMode, hdfsSnapEnabled, hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines, storageReady]);
@@ -687,7 +685,7 @@ export default function HadoopVMSimulator() {
     if (base === "df") return [out("Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   18G   30G  38% /\n/dev/sda2       100G   25G   70G  27% /datos")];
     if (base === "ifconfig" || base === "ip") return [out("eth0: inet 192.168.56.10  netmask 255.255.255.0")];
 
-    if (base === "reset") { (async () => { try { await window.storage.delete(STORAGE_KEY); } catch {} })(); const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setCwd("/home/hadoop"); setServices({ namenode: false, datanode: false, secondarynamenode: false, resourcemanager: false, nodemanager: false, historyserver: false }); setSafeMode(false); setHdfsSnapEnabled(new Set()); setHdfsSnapshots({}); setYarnApps([]); setAppCounter(1); setFsimageCounter(42); setPermsMap({}); setHistory([]); setSshNode(null); setSshCwd("/home/hadoop"); setLines(welcomeLines); return [out("✓ Estado reiniciado.", "success")]; }
+    if (base === "reset") { try { localStorage.removeItem(STORAGE_KEY); } catch {} const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setCwd("/home/hadoop"); setServices({ namenode: false, datanode: false, secondarynamenode: false, resourcemanager: false, nodemanager: false, historyserver: false }); setSafeMode(false); setHdfsSnapEnabled(new Set()); setHdfsSnapshots({}); setYarnApps([]); setAppCounter(1); setFsimageCounter(42); setPermsMap({}); setHistory([]); setSshNode(null); setSshCwd("/home/hadoop"); setLines(welcomeLines); return [out("✓ Estado reiniciado.", "success")]; }
 
     if (base === "echo") { const arg = tokens.slice(1).join(" ").replace(/['"]/g, ""); if (arg.includes("$(hadoop classpath)")) return [out("/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*")]; if (arg.includes("$HADOOP_HOME")) return [out("/opt/hadoop")]; if (arg.includes("$HOME")) return [out("/home/hadoop")]; if (arg.includes("$JAVA_HOME")) return [out("/usr/lib/jvm/java-11-openjdk-amd64")]; return [out(arg)]; }
     if (base === "wc") { const target = tokens.find((t, i) => i > 0 && !t.startsWith("-")); if (!target) return [out("wc: falta operando", "error")]; const nd = getLocalNode(resolvePath(target, cwd)); if (!nd || nd.type !== "file") return [out(`wc: ${target}: No existe`, "error")]; const c = nd.content || ""; const lc = c.split("\n").length; const wc = c.split(/\s+/).filter(Boolean).length; if (tokens.includes("-l")) return [out(`  ${lc} ${target}`)]; if (tokens.includes("-w")) return [out(`  ${wc} ${target}`)]; if (tokens.includes("-c")) return [out(`  ${c.length} ${target}`)]; return [out(`  ${lc}  ${wc} ${c.length} ${target}`)]; }
