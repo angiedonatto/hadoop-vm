@@ -100,6 +100,7 @@ export default function HadoopVMSimulator() {
   const [yarnApps, setYarnApps] = useState([]);
   const [appCounter, setAppCounter] = useState(1);
   const [fsimageCounter, setFsimageCounter] = useState(42);
+  const [permsMap, setPermsMap] = useState({});  // path -> "rwxr-xr-x" etc
   const termRef = useRef(null);
   const inputRef = useRef(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -181,16 +182,50 @@ export default function HadoopVMSimulator() {
         let sz;
         if (flags.includes("h")) { if (rawSize >= 1048576) sz = (rawSize / 1048576).toFixed(1) + "M"; else if (rawSize >= 1024) sz = (rawSize / 1024).toFixed(1) + "K"; else sz = String(rawSize); }
         else sz = String(rawSize).padStart(8);
-        return `${isDir ? "d" : "-"}rwxr-xr-x 1 hadoop hadoop ${sz} Feb 28 10:00 ${i}`;
+        const storedPerms = permsMap[cp] || (isDir ? "rwxr-xr-x" : "rw-r--r--");
+        return `${isDir ? "d" : "-"}${storedPerms} 1 hadoop hadoop ${sz} Feb 28 10:00 ${i}`;
       });
       return `total ${all.length * 4}\n${rows.join("\n")}`;
     }
     return items.join("  ");
-  }, [localFS, getDirItems]);
+  }, [localFS, getDirItems, permsMap]);
 
   const processCommand = useCallback((cmd) => {
-    const trimmed = cmd.trim();
+    const trimmed = cmd.trim().replace(/\s*2>&1\s*$/, "");
     if (!trimmed) return [];
+
+    // ── Handle redirects: >> and > ──
+    const redirectMatch = trimmed.match(/^(.+?)\s*(>>|>)\s*(\S+)\s*$/);
+    if (redirectMatch && !redirectMatch[3].startsWith("&") && !/\d>/.test(redirectMatch[1].slice(-2))) {
+      const leftCmd = redirectMatch[1].trim();
+      const isAppend = redirectMatch[2] === ">>";
+      const targetFile = redirectMatch[3];
+
+      // Execute left side to get output text
+      const leftTokens = parseTokens(leftCmd);
+      let outputText = "";
+      if (leftTokens[0] === "echo") {
+        outputText = leftTokens.slice(1).join(" ").replace(/['"]/g, "");
+        if (outputText.includes("$HADOOP_HOME")) outputText = outputText.replace(/\$HADOOP_HOME/g, "/opt/hadoop");
+        if (outputText.includes("$HOME")) outputText = outputText.replace(/\$HOME/g, "/home/hadoop");
+      } else {
+        // Run command and capture output
+        const results = processCommand(leftCmd);
+        outputText = results.filter(r => r.type !== "clear").map(r => r.text).join("\n");
+      }
+
+      const resolved = resolvePath(targetFile, cwd);
+      const parent = resolved.substring(0, resolved.lastIndexOf("/")) || "/";
+      const name = resolved.substring(resolved.lastIndexOf("/") + 1);
+      let nf = { ...localFS };
+      if (!nf[parent]) nf = ensureLocalDir(parent, nf);
+      const existing = nf[parent]?.files?.[name] || "";
+      const newContent = isAppend ? (existing ? existing + "\n" + outputText : outputText) : outputText;
+      nf[parent] = { ...nf[parent], files: { ...(nf[parent].files || {}), [name]: newContent }, children: [...new Set([...(nf[parent].children || []), name])] };
+      setLocalFS(nf);
+      return [];
+    }
+
     const pipes = trimmed.split("|").map(s => s.trim());
     const mainCmd = pipes[0];
     const tokens = parseTokens(mainCmd);
@@ -471,7 +506,49 @@ export default function HadoopVMSimulator() {
       return [];
     }
 
-    if (base === "chmod") return [];
+    if (base === "chmod") {
+      const chFlags = tokens.filter(t => t.startsWith("-")).map(t => t.replace(/^-+/, "")).join("");
+      const pos = tokens.filter((t, i) => i > 0 && !t.startsWith("-"));
+      if (pos.length < 2) return [out("chmod: falta un operando", "error")];
+      const mode = pos[0]; // e.g. "755", "644", "u+x", "+x"
+      const targets = pos.slice(1);
+      const newPerms = { ...permsMap };
+
+      // Convert numeric mode to rwx string
+      const numToRwx = (n) => {
+        const d = String(n).padStart(3, "0");
+        const map = { "0": "---", "1": "--x", "2": "-w-", "3": "-wx", "4": "r--", "5": "r-x", "6": "rw-", "7": "rwx" };
+        return (map[d[0]] || "---") + (map[d[1]] || "---") + (map[d[2]] || "---");
+      };
+
+      for (const t of targets) {
+        const resolved = resolvePath(t, cwd);
+        // Handle -R (recursive) - apply to all children too
+        const pathsToChange = [resolved];
+        if (chFlags.includes("R") && localFS[resolved]) {
+          Object.keys(localFS).forEach(k => { if (k.startsWith(resolved + "/")) pathsToChange.push(k); });
+          // Also files inside dirs
+          const dirNode = localFS[resolved];
+          if (dirNode?.files) Object.keys(dirNode.files).forEach(f => pathsToChange.push(resolved + "/" + f));
+        }
+        for (const p of pathsToChange) {
+          if (/^\d{3,4}$/.test(mode)) {
+            const m = mode.length === 4 ? mode.slice(1) : mode;
+            newPerms[p] = numToRwx(m);
+          } else if (mode.includes("+x") || mode === "u+x") {
+            const cur = newPerms[p] || "rw-r--r--";
+            newPerms[p] = cur.substring(0, 2) + "x" + cur.substring(3);
+          } else if (mode.includes("-x")) {
+            const cur = newPerms[p] || "rwxr-xr-x";
+            newPerms[p] = cur.replace(/x/g, "-");
+          } else {
+            newPerms[p] = mode; // store raw if we can't parse
+          }
+        }
+      }
+      setPermsMap(newPerms);
+      return [];
+    }
     if (base === "ssh") return [out(`ssh: connect to host ${tokens[1] || "?"} port 22: Connection refused\n(Simulación: solo hay un nodo pseudo-distribuido)`, "warn")];
     if (base === "scp") return [out("scp: Simulación — solo hay un nodo disponible en este pseudo-clúster.", "warn")];
 
@@ -770,8 +847,46 @@ export default function HadoopVMSimulator() {
     }
 
     if (["nano", "vim", "vi", "gedit"].includes(base)) return [out(`(Simulación: ${base} no disponible. Usa 'cat' para ver archivos.)`, "warn")];
+
+    // ── bash / sh — execute script file ──
+    if (base === "bash" || base === "sh") {
+      const scriptPath = tokens[1];
+      if (!scriptPath) return [out(`${base}: falta nombre de archivo`, "error")];
+      const resolved = resolvePath(scriptPath, cwd);
+      const node = getLocalNode(resolved);
+      if (!node || node.type !== "file") return [out(`${base}: ${scriptPath}: No existe el archivo`, "error")];
+      const content = node.content || "";
+      const scriptLines = content.split("\n").filter(l => l.trim() && !l.trim().startsWith("#"));
+      const results = [];
+      for (const line of scriptLines) {
+        const lineResults = processCommand(line.trim());
+        results.push(...lineResults);
+      }
+      return results;
+    }
+
+    // ── ./script execution ──
+    if (base.startsWith("./")) {
+      const scriptName = base.substring(2);
+      const resolved = resolvePath(scriptName, cwd);
+      const node = getLocalNode(resolved);
+      if (!node || node.type !== "file") return [out(`bash: ${base}: No existe el archivo o el directorio`, "error")];
+      // Check execute permission
+      const perm = permsMap[resolved] || "rw-r--r--";
+      if (!perm.includes("x")) return [out(`bash: ${base}: Permiso denegado\n\nTip: Ejecuta primero: chmod u+x ${scriptName}`, "error")];
+      const content = node.content || "";
+      const scriptLines = content.split("\n").filter(l => l.trim() && !l.trim().startsWith("#"));
+      const results = [];
+      for (const line of scriptLines) {
+        const lineResults = processCommand(line.trim());
+        results.push(...lineResults);
+      }
+      if (results.length === 0) return [out(`(script ${scriptName} ejecutado — sin output)`, "success")];
+      return results;
+    }
+
     return [out(`bash: ${base}: comando no encontrado`, "error")];
-  }, [cwd, services, localFS, hdfsFS, safeMode, hdfsSnapEnabled, hdfsSnapshots, appCounter, fsimageCounter, out, resolvePath, getLocalNode, ensureHdfsDir, ensureLocalDir, formatLsSingle, yarnApps, getDirItems]);
+  }, [cwd, services, localFS, hdfsFS, safeMode, hdfsSnapEnabled, hdfsSnapshots, appCounter, fsimageCounter, permsMap, out, resolvePath, getLocalNode, ensureHdfsDir, ensureLocalDir, formatLsSingle, yarnApps, getDirItems]);
 
   const handleSubmit = () => {
     const cmd = input.trim(); if (!cmd) return;
@@ -835,7 +950,7 @@ export default function HadoopVMSimulator() {
   if (!localFS || !hdfsFS) return <div style={{ background: "#0d0d0d", color: "#ccc", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "monospace" }}>Cargando sistema...</div>;
 
   return (
-    <div style={{ height: "100vh", minWidth: "100wh", display: "flex", flexDirection: "column", background: "#0a0a0a", fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace", color: "#e0e0e0", overflow: "hidden" }}>
+    <div style={{ height: "100vh", width: "100%", display: "flex", flexDirection: "column", background: "#0a0a0a", fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace", color: "#e0e0e0", overflow: "hidden" }}>
       {/* Title Bar */}
       <div style={{ background: "linear-gradient(180deg, #3a3a3a 0%, #2b2b2b 100%)", borderBottom: "1px solid #1a1a1a", padding: "6px 16px", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <div style={{ display: "flex", gap: 6 }}>
