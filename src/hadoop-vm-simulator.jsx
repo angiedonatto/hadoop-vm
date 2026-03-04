@@ -268,8 +268,31 @@ function HdfsWebUI({ services, hdfsFS, safeMode, hdfsSnapEnabled, fsimageCounter
 // ══════════════════════════════════════════════════════════════════
 // YARN WEB UI COMPONENT (:8088)
 // ══════════════════════════════════════════════════════════════════
+// ── Info Modal ──────────────────────────────────────────────────
+function InfoModal({ title, children, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: 6, padding: "24px 28px", maxWidth: 540, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 13, color: "#333", maxHeight: "80vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, borderBottom: "2px solid #0b7285", paddingBottom: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 15, color: "#0b7285" }}>{title}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ lineHeight: 1.75, fontSize: 12.5 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+function InfoBtn({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button onClick={() => setOpen(true)} title="¿Qué es esto?" style={{ background: "#e8f4f8", border: "1px solid #0b7285", borderRadius: "50%", width: 17, height: 17, fontSize: 10, cursor: "pointer", color: "#0b7285", fontWeight: 700, lineHeight: "15px", padding: 0, marginLeft: 6, flexShrink: 0 }}>?</button>
+    {open && <InfoModal title={title} onClose={() => setOpen(false)}>{children}</InfoModal>}
+  </>;
+}
+
+// ── YARN Web UI ──────────────────────────────────────────────────
 function YarnWebUI({ services, yarnApps }) {
-  const [subTab, setSubTab] = useState("metrics");
+  const [section, setSection] = useState("about");
   const [appFilter, setAppFilter] = useState("ALL");
   const isUp = services.resourcemanager;
 
@@ -277,249 +300,596 @@ function YarnWebUI({ services, yarnApps }) {
   const finished = apps.filter(a => a.state === "FINISHED").length;
   const running = apps.filter(a => a.state === "RUNNING").length;
   const killed = apps.filter(a => a.state === "KILLED").length;
-  const submitted = apps.filter(a => ["SUBMITTED", "ACCEPTED"].includes(a.state)).length;
   const totalContainers = finished * 2 + running * 3;
-  const memUsed = 3200 + running * 1024;
-  const memTotal = 12288; // 3 nodes x 4096
-  const vcUsed = 1 + running * 2;
-  const vcTotal = 8; // 4+2+2
+  const memUsed = running > 0 ? 3200 + running * 1024 : 1024;
+  const memTotal = 12288;
+  const vcUsed = running > 0 ? 1 + running * 2 : 1;
+  const vcTotal = 8;
 
   const nodes = [
-    { host: "hadoop-VirtualBox", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: 3200, vc: 4, vcUsed: 1, containers: running > 0 ? Math.ceil(running * 0.5) : 0, lastHealth: "Tue Mar 03 10:00:00" },
-    { host: "nodo2", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: 1500, vc: 2, vcUsed: running > 0 ? 1 : 0, containers: running > 0 ? Math.ceil(running * 0.3) : 0, lastHealth: "Tue Mar 03 10:00:02" },
-    { host: "nodo3", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: 1500, vc: 2, vcUsed: running > 0 ? 1 : 0, containers: running > 0 ? Math.ceil(running * 0.2) : 0, lastHealth: "Tue Mar 03 10:00:04" },
+    { host: "hadoop-VirtualBox", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: running > 0 ? 3200 : 512, vc: 4, vcUsed: running > 0 ? 2 : 1, containers: running > 0 ? Math.ceil(running * 0.5) : 0, lastHealth: "Tue Mar 03 10:00:00 COT 2026", version: "3.4.1" },
+    { host: "nodo2", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: running > 0 ? 1500 : 256, vc: 2, vcUsed: running > 0 ? 1 : 0, containers: running > 0 ? Math.ceil(running * 0.3) : 0, lastHealth: "Tue Mar 03 10:00:02 COT 2026", version: "3.4.1" },
+    { host: "nodo3", port: 45454, http: 8042, state: "RUNNING", rack: "/default-rack", mem: 4096, memUsed: running > 0 ? 1500 : 256, vc: 2, vcUsed: running > 0 ? 1 : 0, containers: running > 0 ? Math.ceil(running * 0.2) : 0, lastHealth: "Tue Mar 03 10:00:04 COT 2026", version: "3.4.1" },
   ];
 
   const filteredApps = appFilter === "ALL" ? apps : apps.filter(a => a.state === appFilter);
 
-  if (!isUp) return <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", fontFamily: "Verdana, sans-serif" }}><div style={{ textAlign: "center", color: "#c00" }}><div style={{ fontSize: 48, marginBottom: 12 }}>⚠</div><div style={{ fontSize: 16, fontWeight: 600 }}>ResourceManager no está activo</div><div style={{ fontSize: 13, color: "#888", marginTop: 6 }}>Inicia YARN: <code>./start-yarn.sh</code></div></div></div>;
+  const SideLink = ({ id, label }) => (
+    <div onClick={() => setSection(id)} style={{ padding: "3px 8px 3px 16px", cursor: "pointer", color: section === id ? "#0b7285" : "#4a90d9", textDecoration: "underline", fontSize: 12, fontWeight: section === id ? 700 : 400 }}>{label}</div>
+  );
+  const SideGroup = ({ label, children }) => (
+    <div style={{ marginBottom: 6 }}>
+      <div style={{ padding: "4px 8px", fontWeight: 700, fontSize: 12, color: "#333", cursor: "pointer", userSelect: "none" }}>▾ {label}</div>
+      {children}
+    </div>
+  );
+
+  const DonutChart = ({ pct, color, label, sub }) => (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ position: "relative", width: 100, height: 100, margin: "0 auto 6px" }}>
+        <svg viewBox="0 0 36 36" style={{ width: 100, height: 100, transform: "rotate(-90deg)" }}>
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e8e8e8" strokeWidth="4" />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke={color} strokeWidth="4" strokeDasharray={`${Math.min(pct, 100)}, 100`} strokeLinecap="round" />
+        </svg>
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#333" }}>{pct.toFixed(0)}%</div>
+          <div style={{ fontSize: 9, color: "#999" }}>{sub}</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#555" }}>{label}</div>
+    </div>
+  );
+
+  if (!isUp) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#f5f5f5", fontFamily: "Verdana, sans-serif" }}>
+      <div style={{ textAlign: "center", color: "#c00" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>⚠</div>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>ResourceManager no está activo</div>
+        <div style={{ fontSize: 13, color: "#888", marginTop: 6 }}>Inicia YARN: <code>./start-yarn.sh</code></div>
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ flex: 1, overflow: "auto", background: "#fafafa", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 13, color: "#333" }}>
-      {/* YARN Header */}
-      <div style={{ ...WS.hdr, borderBottomColor: "#0b7285" }}>
+    <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#f5f5f5", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 13, color: "#333" }}>
+      {/* Header */}
+      <div style={{ background: "#fff", borderBottom: "3px solid #0b7285", padding: "7px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: "#0b7285" }}>🧶 YARN</span>
-          <span style={{ fontSize: 13, color: "#666" }}>ResourceManager — hadoop-VirtualBox:8088</span>
+          <span style={{ fontSize: 22, fontWeight: 900, color: "#e47a2c", letterSpacing: -1 }}>hadoop</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "#333" }}>ResourceManager</span>
+          <span style={{ fontSize: 11, color: "#999", marginLeft: 4 }}>hadoop-VirtualBox:8088</span>
         </div>
-        <span style={{ fontSize: 11, color: "#999" }}>Hadoop 3.4.1 | CapacityScheduler</span>
+        <span style={{ fontSize: 11, color: "#aaa" }}>Hadoop 3.4.1 · CapacityScheduler</span>
       </div>
-      {/* Nav */}
-      <div style={{ ...WS.nav, borderBottomColor: "#0b7285" }}>
-        {[["metrics", "Cluster Metrics"], ["nodes", "Nodes"], ["apps", "Applications"], ["scheduler", "Scheduler"]].map(([id, l]) => (
-          <button key={id} onClick={() => setSubTab(id)} style={{ ...WS.navBtn(subTab === id), borderBottomColor: subTab === id ? "#0b7285" : "transparent" }}>{l}</button>
-        ))}
-      </div>
-      <div style={{ padding: "12px 18px" }}>
-        {/* ── CLUSTER METRICS ── */}
-        {subTab === "metrics" && <>
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Cluster Overview</div>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              {[
-                ["Apps Submitted", apps.length, "#4a90d9"],
-                ["Apps Running", running, "#f0ad4e"],
-                ["Apps Completed", finished, "#5cb85c"],
-                ["Apps Killed", killed, "#d9534f"],
-                ["Containers Running", totalContainers, "#5bc0de"],
-              ].map(([t, v, c]) => (
-                <div key={t} style={WS.card}><div style={WS.cardTitle}>{t}</div><div style={{ ...WS.cardVal, color: c }}>{v}</div></div>
+
+      <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
+        {/* Sidebar */}
+        <div style={{ width: 160, background: "#fff", borderRight: "1px solid #ddd", flexShrink: 0, overflowY: "auto", paddingTop: 10, fontSize: 12 }}>
+          <SideGroup label="Cluster">
+            <SideLink id="about" label="About" />
+            <SideLink id="nodes" label="Nodes" />
+            <SideLink id="nodelabels" label="Node Labels" />
+            <div style={{ padding: "3px 8px 3px 12px", fontSize: 11, color: "#888", fontWeight: 600, marginTop: 4 }}>Applications</div>
+            {["ALL", "NEW", "SUBMITTED", "ACCEPTED", "RUNNING", "FINISHED", "FAILED", "KILLED"].map(s => (
+              <div key={s} onClick={() => { setSection("apps"); setAppFilter(s === "ALL" ? "ALL" : s); }} style={{ padding: "2px 8px 2px 22px", cursor: "pointer", color: "#4a90d9", textDecoration: "underline", fontSize: 11 }}>{s}</div>
+            ))}
+            <SideLink id="scheduler" label="Scheduler" />
+          </SideGroup>
+          <SideGroup label="Tools">
+            <SideLink id="tools" label="Configuration" />
+          </SideGroup>
+        </div>
+
+        {/* Main content */}
+        <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
+
+          {/* ── ABOUT ── */}
+          {section === "about" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Cluster Metrics</span>
+              <InfoBtn title="Cluster Metrics — YARN">
+                <p><b>Apps Submitted:</b> total de aplicaciones MapReduce/YARN enviadas al clúster desde que arrancó el ResourceManager.</p>
+                <p><b>Apps Running:</b> aplicaciones actualmente en ejecución. Cada una ocupa contenedores (memoria + VCores).</p>
+                <p><b>Apps Completed:</b> aplicaciones que terminaron con éxito (FinalStatus = SUCCEEDED).</p>
+                <p><b>Containers Running:</b> número de contenedores activos. Un job MapReduce usa al menos 1 contenedor ApplicationMaster + N mappers + M reducers.</p>
+                <p><b>Memory Used/Total:</b> MB de RAM del clúster asignados a contenedores vs. capacidad total configurable en yarn-site.xml (<code>yarn.nodemanager.resource.memory-mb</code>).</p>
+                <p><b>VCores Used/Total:</b> núcleos virtuales asignados. Configurado en <code>yarn.nodemanager.resource.cpu-vcores</code>.</p>
+              </InfoBtn>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+              {[["Apps Submitted", apps.length, "#4a90d9"], ["Apps Running", running, "#f0ad4e"], ["Apps Completed", finished, "#5cb85c"], ["Apps Killed", killed, "#d9534f"], ["Containers Running", totalContainers, "#5bc0de"], ["Memory Used", `${(memUsed/1024).toFixed(1)} GB`, "#e47a2c"], ["Memory Total", `${(memTotal/1024).toFixed(0)} GB`, "#555"], ["VCores Used", vcUsed, "#9b59b6"], ["VCores Total", vcTotal, "#555"]].map(([t, v, c]) => (
+                <div key={t} style={{ ...WS.card, minWidth: 110 }}><div style={WS.cardTitle}>{t}</div><div style={{ ...WS.cardVal, color: c, fontSize: 17 }}>{v}</div></div>
               ))}
             </div>
-          </div>
-          {/* Memory */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Cluster Resources — Memory</div>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
-              <div style={WS.card}><div style={WS.cardTitle}>Memory Total</div><div style={WS.cardVal}>{(memTotal / 1024).toFixed(1)} GB</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>Memory Used</div><div style={{ ...WS.cardVal, color: "#e47a2c" }}>{(memUsed / 1024).toFixed(1)} GB</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>Memory Available</div><div style={{ ...WS.cardVal, color: "#5cb85c" }}>{((memTotal - memUsed) / 1024).toFixed(1)} GB</div></div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}><span>Memory Utilization</span><span>{((memUsed / memTotal) * 100).toFixed(1)}%</span></div>
-            <div style={WS.bar()}><div style={WS.barFill((memUsed / memTotal) * 100, "#0b7285")} /><span style={{ position: "absolute", width: "100%", textAlign: "center", fontSize: 10, color: "#555", fontWeight: 600 }}>{memUsed} MB / {memTotal} MB</span></div>
-          </div>
-          {/* VCores */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Cluster Resources — VCores</div>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
-              <div style={WS.card}><div style={WS.cardTitle}>VCores Total</div><div style={WS.cardVal}>{vcTotal}</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>VCores Used</div><div style={{ ...WS.cardVal, color: "#e47a2c" }}>{vcUsed}</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>VCores Available</div><div style={{ ...WS.cardVal, color: "#5cb85c" }}>{vcTotal - vcUsed}</div></div>
-            </div>
-            <div style={WS.bar()}><div style={WS.barFill((vcUsed / vcTotal) * 100, "#9b59b6")} /><span style={{ position: "absolute", width: "100%", textAlign: "center", fontSize: 10, color: "#555", fontWeight: 600 }}>{vcUsed} / {vcTotal} VCores</span></div>
-          </div>
-          {/* Active Nodes */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Node Summary</div>
-            <div style={{ display: "flex", gap: 14 }}>
-              <div style={WS.card}><div style={WS.cardTitle}>Active Nodes</div><div style={{ ...WS.cardVal, color: "#090" }}>3</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>Decommissioned</div><div style={WS.cardVal}>0</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>Lost Nodes</div><div style={WS.cardVal}>0</div></div>
-              <div style={WS.card}><div style={WS.cardTitle}>Unhealthy Nodes</div><div style={WS.cardVal}>0</div></div>
-            </div>
-          </div>
-        </>}
 
-        {/* ── NODES ── */}
-        {subTab === "nodes" && <>
-          <div style={WS.section}>
-            <div style={WS.sTitle}>NodeManager Information — {nodes.length} Nodes</div>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+              <span style={WS.sTitle}>Cluster Nodes Metrics</span>
+              <InfoBtn title="Cluster Nodes Metrics">
+                <p><b>Active Nodes:</b> NodeManagers que están respondiendo heartbeats al ResourceManager. Si un nodo deja de enviar heartbeats por más de 10 minutos, pasa a estado LOST.</p>
+                <p><b>Decommissioning/Decommissioned:</b> nodos que están siendo retirados del clúster de forma controlada. Se esperan a que terminen sus contenedores antes de apagarse.</p>
+                <p><b>Lost Nodes:</b> nodos que no han enviado heartbeat y se consideran caídos. Los contenedores que tenían se marcan como fallidos.</p>
+                <p><b>Unhealthy Nodes:</b> nodos que reportan problemas (poco espacio en disco, etc.) y no reciben nuevos contenedores.</p>
+              </InfoBtn>
+            </div>
+            <table style={{ ...WS.tbl, marginBottom: 16 }}>
+              <thead><tr>{["Active Nodes", "Decommissioning Nodes", "Decommissioned Nodes", "Lost Nodes", "Unhealthy Nodes", "Rebooted Nodes", "Shutdown Nodes"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <tbody><tr>{[3, 0, 0, 0, 0, 0, 0].map((v, i) => <td key={i} style={{ ...WS.td, color: i === 0 ? "#090" : v > 0 ? "#c00" : "#333", fontWeight: i === 0 || v > 0 ? 700 : 400 }}>{v}</td>)}</tr></tbody>
+            </table>
+
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+              <span style={WS.sTitle}>Scheduler Metrics</span>
+              <InfoBtn title="Scheduler Metrics — CapacityScheduler">
+                <p><b>Scheduler Type:</b> YARN soporta tres schedulers: FIFO (simple cola), Capacity Scheduler (colas con capacidad garantizada, el más usado en producción) y Fair Scheduler (reparte recursos equitativamente).</p>
+                <p><b>Minimum Allocation:</b> la cantidad mínima de recursos que YARN asigna a un contenedor. Si una app pide menos, igual recibe el mínimo.</p>
+                <p><b>Maximum Allocation:</b> el máximo por contenedor. Configurado en <code>yarn.scheduler.maximum-allocation-mb</code> y <code>yarn.scheduler.maximum-allocation-vcores</code>.</p>
+                <p><b>Maximum Cluster Application Priority:</b> prioridad máxima que puede tener una aplicación. Las de mayor prioridad reciben recursos primero.</p>
+              </InfoBtn>
+            </div>
+            <table style={{ ...WS.tbl, marginBottom: 16 }}>
+              <thead><tr>{["Scheduler Type", "Scheduling Resource Type", "Minimum Allocation", "Maximum Allocation", "Maximum Cluster Application Priority"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <tbody><tr>
+                <td style={WS.td}>Capacity Scheduler</td>
+                <td style={WS.td}>[memory-mb (unit=Mi), vcores]</td>
+                <td style={WS.td}>&lt;memory:1024, vCores:1&gt;</td>
+                <td style={WS.td}>&lt;memory:4096, vCores:4&gt;</td>
+                <td style={WS.td}>0</td>
+              </tr></tbody>
+            </table>
+
+            <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: "10px 14px", fontSize: 12, lineHeight: 2 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: "0 10px" }}>
+                <b>Cluster ID:</b><span>1700000000000</span>
+                <b>ResourceManager state:</b><span style={{ color: "#090" }}>STARTED</span>
+                <b>ResourceManager HA state:</b><span>active</span>
+                <b>ResourceManager RMStateStore:</b><span>org.apache.hadoop.yarn.server.resourcemanager.recovery.NullRMStateStore</span>
+                <b>ResourceManager started on:</b><span>Tue Mar 03 08:00:00 COT 2026</span>
+                <b>ResourceManager version:</b><span>3.4.1</span>
+                <b>Hadoop version:</b><span>3.4.1</span>
+              </div>
+            </div>
+          </>}
+
+          {/* ── NODES ── */}
+          {section === "nodes" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Nodes of the cluster</span>
+              <InfoBtn title="NodeManagers">
+                <p>Cada <b>NodeManager</b> es un agente que corre en cada nodo del clúster. Su responsabilidad es:</p>
+                <ul style={{ paddingLeft: 18 }}>
+                  <li>Lanzar y monitorear <b>contenedores</b> (procesos con recursos asignados)</li>
+                  <li>Reportar recursos disponibles y estado de salud al ResourceManager cada pocos segundos (<b>heartbeat</b>)</li>
+                  <li>Gestionar logs de los contenedores</li>
+                </ul>
+                <p><b>HTTP Address:</b> puerto 8042 donde corre la UI web del NodeManager individual.</p>
+                <p><b>Last health-report:</b> timestamp del último heartbeat recibido. Si supera 10 min sin heartbeat, el nodo se considera LOST.</p>
+                <p><b>Containers:</b> número de contenedores activos actualmente en ese nodo. Cada contenedor es un proceso Java con memoria y VCores asignados.</p>
+              </InfoBtn>
+            </div>
             <table style={WS.tbl}>
-              <thead><tr>{["Node Address", "HTTP Port", "Rack", "State", "Memory (Used/Total)", "VCores (Used/Total)", "Running Containers", "Last Health"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["Node Address", "Node HTTP Address", "Rack", "Node State", "Containers", "Mem Used", "Mem Avail", "VCores Used", "VCores Avail", "Version", "Last health-report"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
               <tbody>
                 {nodes.map((n, i) => (
                   <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
-                    <td style={{ ...WS.td, fontWeight: 600, color: "#4a90d9" }}>{n.host}:{n.port}</td>
-                    <td style={WS.td}>{n.host}:{n.http}</td>
+                    <td style={{ ...WS.td, color: "#4a90d9", fontWeight: 600 }}>{n.host}:{n.port}</td>
+                    <td style={{ ...WS.td, color: "#4a90d9" }}>{n.host}:{n.http}</td>
                     <td style={WS.td}>{n.rack}</td>
                     <td style={{ ...WS.td, color: "#090", fontWeight: 600 }}>{n.state}</td>
-                    <td style={WS.td}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 60, height: 12, background: "#eee", borderRadius: 2, overflow: "hidden" }}><div style={{ width: `${(n.memUsed / n.mem) * 100}%`, height: "100%", background: "#0b7285" }} /></div>
-                        <span style={{ fontSize: 11 }}>{n.memUsed} / {n.mem} MB</span>
-                      </div>
-                    </td>
-                    <td style={WS.td}>{n.vcUsed} / {n.vc}</td>
                     <td style={WS.td}>{n.containers}</td>
+                    <td style={WS.td}>{n.memUsed} MB</td>
+                    <td style={WS.td}>{n.mem - n.memUsed} MB</td>
+                    <td style={WS.td}>{n.vcUsed}</td>
+                    <td style={WS.td}>{n.vc - n.vcUsed}</td>
+                    <td style={{ ...WS.td, fontSize: 11 }}>{n.version}</td>
                     <td style={{ ...WS.td, fontSize: 11 }}>{n.lastHealth}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-          {/* Per-node resource detail */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Resource Distribution per Node</div>
-            {nodes.map((n, i) => (
-              <div key={i} style={{ marginBottom: 12, padding: 10, background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6, color: "#333" }}>{n.host}</div>
-                <div style={{ display: "flex", gap: 20 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, marginBottom: 2 }}>Memory: {n.memUsed}/{n.mem} MB</div>
-                    <div style={{ height: 14, background: "#eee", borderRadius: 3 }}><div style={{ height: "100%", width: `${(n.memUsed / n.mem) * 100}%`, background: "#0b7285", borderRadius: 3 }} /></div>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, marginBottom: 2 }}>VCores: {n.vcUsed}/{n.vc}</div>
-                    <div style={{ height: 14, background: "#eee", borderRadius: 3 }}><div style={{ height: "100%", width: `${(n.vcUsed / n.vc) * 100}%`, background: "#9b59b6", borderRadius: 3 }} /></div>
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}><span style={WS.sTitle}>Resource usage per node</span><InfoBtn title="Uso de recursos por nodo"><p>Visualización del consumo de <b>memoria</b> y <b>VCores</b> en cada NodeManager del clúster. La barra verde indica el porcentaje utilizado respecto al total configurado en <code>yarn.nodemanager.resource.memory-mb</code> y <code>yarn.nodemanager.resource.cpu-vcores</code>.</p></InfoBtn></div>
+              {nodes.map((n, i) => (
+                <div key={i} style={{ marginBottom: 10, padding: "10px 14px", background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>{n.host} <span style={{ fontSize: 11, color: "#090", fontWeight: 400 }}>● RUNNING</span></div>
+                  <div style={{ display: "flex", gap: 24 }}>
+                    {[["Memory", n.memUsed, n.mem, "MB", "#0b7285"], ["VCores", n.vcUsed, n.vc, "cores", "#9b59b6"]].map(([lbl, used, total, unit, color]) => (
+                      <div key={lbl} style={{ flex: 1 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}><span>{lbl}</span><span style={{ color: "#666" }}>{used} / {total} {unit}</span></div>
+                        <div style={{ height: 14, background: "#eee", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${(used/total)*100}%`, background: color, borderRadius: 3 }} /></div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </>}
+              ))}
+            </div>
+          </>}
 
-        {/* ── APPLICATIONS ── */}
-        {subTab === "apps" && <>
-          <div style={WS.section}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <div style={WS.sTitle}>Applications — Total: {apps.length}</div>
-              <div style={{ display: "flex", gap: 4 }}>
-                {["ALL", "RUNNING", "FINISHED", "KILLED"].map(f => (
+          {/* ── NODE LABELS ── */}
+          {section === "nodelabels" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Node Labels</span>
+              <InfoBtn title="Node Labels">
+                <p>Los <b>Node Labels</b> permiten etiquetar nodos del clúster para que ciertas aplicaciones o colas puedan solicitar nodos con características específicas (ej. nodos con GPU, nodos de alta memoria).</p>
+                <p>En este clúster no hay etiquetas configuradas (configuración estándar). En producción se definen en <code>yarn.node-labels.enabled=true</code> y se asignan con:</p>
+                <code style={{ background: "#f5f5f5", padding: "4px 8px", display: "block", marginTop: 6, borderRadius: 3 }}>yarn rmadmin -addToClusterNodeLabels "label1,label2"</code>
+              </InfoBtn>
+            </div>
+            <div style={{ background: "#fff5cc", border: "1px solid #e6d87a", borderRadius: 4, padding: 12, fontSize: 12, color: "#7a6a00" }}>
+              Node Labels are not enabled on this cluster. To enable, set <code>yarn.node-labels.enabled=true</code> in yarn-site.xml.
+            </div>
+          </>}
+
+          {/* ── APPLICATIONS ── */}
+          {section === "apps" && <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <span style={WS.sTitle}>Applications — {filteredApps.length} entries</span>
+                <InfoBtn title="Applications YARN">
+                  <p>Lista de todas las aplicaciones enviadas al clúster YARN. Cada aplicación tiene un <b>Application ID</b> único del tipo <code>application_&lt;timestamp&gt;_&lt;secuencia&gt;</code>.</p>
+                  <p><b>Estados posibles:</b></p>
+                  <ul style={{ paddingLeft: 18 }}>
+                    <li><b>NEW/SUBMITTED/ACCEPTED:</b> la aplicación está en cola esperando recursos</li>
+                    <li><b>RUNNING:</b> el ApplicationMaster está activo y ejecutando tareas</li>
+                    <li><b>FINISHED:</b> completó. FinalStatus puede ser SUCCEEDED, FAILED o KILLED</li>
+                  </ul>
+                  <p><b>ApplicationMaster (AM):</b> proceso especial que negocia recursos con el ResourceManager y coordina los contenedores del job.</p>
+                  <p><b>Progress:</b> porcentaje de completitud reportado por el AM.</p>
+                </InfoBtn>
+              </div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {["ALL", "RUNNING", "FINISHED", "KILLED", "FAILED"].map(f => (
                   <button key={f} onClick={() => setAppFilter(f)} style={{ padding: "3px 10px", fontSize: 11, background: appFilter === f ? "#0b7285" : "#eee", color: appFilter === f ? "#fff" : "#555", border: "1px solid #ccc", borderRadius: 3, cursor: "pointer" }}>{f}</button>
                 ))}
               </div>
             </div>
             <table style={WS.tbl}>
-              <thead><tr>{["Application ID", "Name", "Type", "User", "Queue", "State", "Final Status", "Progress", "Started Time"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <thead><tr>{["ID", "User", "Name", "Application Type", "Queue", "Application Priority", "StartTime", "FinishTime", "State", "FinalStatus", "Running Containers", "Allocated CPU VCores", "Allocated Memory MB", "Progress", "Tracking UI"].map(h => <th key={h} style={{ ...WS.th, fontSize: 10 }}>{h}</th>)}</tr></thead>
               <tbody>
-                {filteredApps.length === 0 && <tr><td colSpan={9} style={{ ...WS.td, textAlign: "center", color: "#888" }}>No applications found</td></tr>}
+                {filteredApps.length === 0 && <tr><td colSpan={15} style={{ ...WS.td, textAlign: "center", color: "#888", padding: 20 }}>No data available in table</td></tr>}
                 {filteredApps.map((app, i) => {
                   const aid = `application_1700000000000_${String(app.id).padStart(4, "0")}`;
                   const stColor = app.state === "FINISHED" ? "#090" : app.state === "RUNNING" ? "#f0ad4e" : app.state === "KILLED" ? "#c00" : "#4a90d9";
+                  const pct = app.state === "FINISHED" ? 100 : app.state === "RUNNING" ? 45 : 0;
                   return (
                     <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
-                      <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11 }}>{aid}</td>
+                      <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 10, color: "#4a90d9" }}>{aid}</td>
+                      <td style={WS.td}>hadoop</td>
                       <td style={{ ...WS.td, fontWeight: 600 }}>{app.name}</td>
                       <td style={WS.td}>MAPREDUCE</td>
-                      <td style={WS.td}>hadoop</td>
                       <td style={WS.td}>default</td>
+                      <td style={{ ...WS.td, textAlign: "center" }}>0</td>
+                      <td style={{ ...WS.td, fontSize: 10 }}>Tue Mar 03 10:{String(app.id).padStart(2,"0")}:00 COT 2026</td>
+                      <td style={{ ...WS.td, fontSize: 10 }}>{app.state === "FINISHED" ? `Tue Mar 03 10:${String(app.id + 2).padStart(2,"0")}:35 COT 2026` : "N/A"}</td>
                       <td style={{ ...WS.td, color: stColor, fontWeight: 600 }}>{app.state}</td>
                       <td style={WS.td}>{app.state === "FINISHED" ? "SUCCEEDED" : app.state === "KILLED" ? "KILLED" : "UNDEFINED"}</td>
+                      <td style={{ ...WS.td, textAlign: "center" }}>{app.state === "RUNNING" ? 3 : 0}</td>
+                      <td style={{ ...WS.td, textAlign: "center" }}>{app.state === "RUNNING" ? 2 : 0}</td>
+                      <td style={{ ...WS.td, textAlign: "center" }}>{app.state === "RUNNING" ? 2048 : 0}</td>
                       <td style={WS.td}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <div style={{ width: 60, height: 12, background: "#eee", borderRadius: 2, overflow: "hidden" }}><div style={{ width: `${app.state === "FINISHED" ? 100 : app.state === "RUNNING" ? 45 : 0}%`, height: "100%", background: app.state === "FINISHED" ? "#5cb85c" : "#f0ad4e" }} /></div>
-                          <span style={{ fontSize: 11 }}>{app.state === "FINISHED" ? "100%" : app.state === "RUNNING" ? "45%" : "0%"}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <div style={{ width: 50, height: 10, background: "#eee", borderRadius: 2, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: pct === 100 ? "#5cb85c" : "#f0ad4e" }} /></div>
+                          <span style={{ fontSize: 10 }}>{pct}%</span>
                         </div>
                       </td>
-                      <td style={{ ...WS.td, fontSize: 11 }}>Tue Mar 03 10:{String(app.id).padStart(2, "0")}:00</td>
+                      <td style={{ ...WS.td, color: "#4a90d9", fontSize: 11 }}>{app.state === "FINISHED" ? "History" : "ApplicationMaster"}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        </>}
+            <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>Showing {filteredApps.length} to {filteredApps.length} of {filteredApps.length} entries</div>
+          </>}
 
-        {/* ── SCHEDULER ── */}
-        {subTab === "scheduler" && <>
-          <div style={WS.section}>
-            <div style={WS.sTitle}>CapacityScheduler — Queue Information</div>
-            <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: 14 }}>
-              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, color: "#0b7285" }}>root</div>
-              <table style={WS.tbl}>
-                <thead><tr>{["Queue Name", "State", "Capacity", "Max Capacity", "Used Capacity", "Abs. Used Cap.", "Num Applications", "Num Containers"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
-                <tbody>
-                  <tr>
-                    <td style={{ ...WS.td, fontWeight: 600 }}>root.default</td>
-                    <td style={{ ...WS.td, color: "#090" }}>RUNNING</td>
-                    <td style={WS.td}>100.0%</td>
-                    <td style={WS.td}>100.0%</td>
-                    <td style={WS.td}>{apps.length > 0 ? ((running / Math.max(apps.length, 1)) * 100).toFixed(1) : "0.0"}%</td>
-                    <td style={WS.td}>{((memUsed / memTotal) * 100).toFixed(1)}%</td>
-                    <td style={WS.td}>{apps.length}</td>
-                    <td style={WS.td}>{totalContainers}</td>
+          {/* ── SCHEDULER ── */}
+          {section === "scheduler" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Application Queues</span>
+              <InfoBtn title="CapacityScheduler — Colas">
+                <p>El <b>CapacityScheduler</b> organiza los recursos del clúster en colas jerárquicas. Cada cola tiene una capacidad garantizada y una capacidad máxima.</p>
+                <p><b>Queue root.default:</b> cola predeterminada. Todas las apps van aquí si no especifican otra cola con <code>-Dmapreduce.job.queuename=nombre</code>.</p>
+                <p><b>Capacity (100%):</b> esta cola puede usar hasta el 100% de los recursos del clúster cuando están disponibles.</p>
+                <p><b>Used Capacity:</b> porcentaje de recursos de la cola actualmente asignados a contenedores activos.</p>
+                <p><b>Absolute Used Capacity:</b> porcentaje respecto al total del clúster (no relativo a la cola).</p>
+                <p><b>Max Applications:</b> número máximo de apps concurrentes en la cola (default: 10000).</p>
+                <p><b>AM Resource Limit:</b> porcentaje máximo de recursos de la cola que puede usar el conjunto de ApplicationMasters (evita que los AMs monopolicen el clúster).</p>
+              </InfoBtn>
+            </div>
+            {/* Legend */}
+            <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap", background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: "8px 14px", fontSize: 11 }}>
+              {[["#5cb85c", "Capacity"], ["#0b7285", "Used (normal)"], ["#e47a2c", "Used (over capacity)"], ["#9b59b6", "Max Capacity"], ["#f0ad4e", "Users Requesting Resources"]].map(([c, l]) => (
+                <span key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 14, background: c, borderRadius: 2, display: "inline-block" }} />{l}</span>
+              ))}
+            </div>
+            {/* root queue visual */}
+            <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontWeight: 700, marginBottom: 10, fontSize: 13 }}>▾ Queue: root <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>— {((memUsed/memTotal)*100).toFixed(1)}% used</span></div>
+              <div style={{ height: 18, background: "#e8e8e8", borderRadius: 3, overflow: "hidden", marginBottom: 6, position: "relative" }}>
+                <div style={{ width: `${(memUsed/memTotal)*100}%`, height: "100%", background: "#0b7285" }} />
+                <span style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", fontSize: 10, fontWeight: 700, color: "#333" }}>{((memUsed/memTotal)*100).toFixed(1)}% used</span>
+              </div>
+              <div style={{ fontWeight: 600, marginBottom: 8, marginLeft: 16, fontSize: 12 }}>▾ Queue: default <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>— {((memUsed/memTotal)*100).toFixed(1)}% used</span></div>
+              <div style={{ height: 14, background: "#e8e8e8", borderRadius: 3, overflow: "hidden", marginLeft: 16 }}>
+                <div style={{ width: `${(memUsed/memTotal)*100}%`, height: "100%", background: "#0b7285" }} />
+              </div>
+            </div>
+            {/* Queue table */}
+            <table style={WS.tbl}>
+              <thead><tr>{["Queue Name", "State", "Used Capacity", "Abs. Used Capacity", "Abs. Configured Capacity", "Abs. Max Capacity", "Used Resources", "Num Active Applications", "Num Pending Applications", "Min Resources", "Max Resources", "Reserved Resources", "Num Containers"].map(h => <th key={h} style={{ ...WS.th, fontSize: 10 }}>{h}</th>)}</tr></thead>
+              <tbody>
+                <tr style={{ background: "#fafafa" }}>
+                  <td style={{ ...WS.td, fontWeight: 600, color: "#0b7285" }}>root</td>
+                  <td style={{ ...WS.td, color: "#090" }}>RUNNING</td>
+                  <td style={WS.td}>{((memUsed/memTotal)*100).toFixed(2)}%</td>
+                  <td style={WS.td}>{((memUsed/memTotal)*100).toFixed(2)}%</td>
+                  <td style={WS.td}>100.00%</td>
+                  <td style={WS.td}>100.00%</td>
+                  <td style={WS.td}>&lt;memory:{memUsed}, vCores:{vcUsed}&gt;</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>{running}</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>0</td>
+                  <td style={WS.td}>&lt;memory:0, vCores:0&gt;</td>
+                  <td style={WS.td}>&lt;memory:{memTotal}, vCores:{vcTotal}&gt;</td>
+                  <td style={WS.td}>&lt;memory:0, vCores:0&gt;</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>{totalContainers}</td>
+                </tr>
+                <tr>
+                  <td style={{ ...WS.td, paddingLeft: 24, fontWeight: 600 }}>root.default</td>
+                  <td style={{ ...WS.td, color: "#090" }}>RUNNING</td>
+                  <td style={WS.td}>{((memUsed/memTotal)*100).toFixed(2)}%</td>
+                  <td style={WS.td}>{((memUsed/memTotal)*100).toFixed(2)}%</td>
+                  <td style={WS.td}>100.00%</td>
+                  <td style={WS.td}>100.00%</td>
+                  <td style={WS.td}>&lt;memory:{memUsed}, vCores:{vcUsed}&gt;</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>{running}</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>0</td>
+                  <td style={WS.td}>&lt;memory:1024, vCores:1&gt;</td>
+                  <td style={WS.td}>&lt;memory:{memTotal}, vCores:{vcTotal}&gt;</td>
+                  <td style={WS.td}>&lt;memory:0, vCores:0&gt;</td>
+                  <td style={{ ...WS.td, textAlign: "center" }}>{totalContainers}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ marginTop: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}><span style={WS.sTitle}>Queue Resource Usage</span></div>
+              <div style={{ display: "flex", gap: 30, justifyContent: "center", flexWrap: "wrap", background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: 20 }}>
+                <DonutChart pct={(memUsed/memTotal)*100} color="#0b7285" label="Memory Used" sub={`${(memUsed/1024).toFixed(1)}/${(memTotal/1024).toFixed(0)} GB`} />
+                <DonutChart pct={(vcUsed/vcTotal)*100} color="#9b59b6" label="VCores Used" sub={`${vcUsed}/${vcTotal} cores`} />
+                <DonutChart pct={apps.length > 0 ? (running/Math.max(apps.length,1))*100 : 0} color="#f0ad4e" label="Apps Running" sub={`${running}/${apps.length} apps`} />
+              </div>
+            </div>
+          </>}
+
+          {/* ── TOOLS / CONFIG ── */}
+          {section === "tools" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>YARN Configuration</span>
+              <InfoBtn title="Configuración YARN">
+                <p>La configuración de YARN se define en <b>yarn-site.xml</b>. Los parámetros más importantes son:</p>
+                <ul style={{ paddingLeft: 18 }}>
+                  <li><code>yarn.resourcemanager.hostname</code>: hostname del ResourceManager</li>
+                  <li><code>yarn.nodemanager.resource.memory-mb</code>: RAM asignable a contenedores por nodo</li>
+                  <li><code>yarn.nodemanager.resource.cpu-vcores</code>: VCores por nodo</li>
+                  <li><code>yarn.scheduler.minimum-allocation-mb</code>: mínimo por contenedor</li>
+                  <li><code>yarn.scheduler.maximum-allocation-mb</code>: máximo por contenedor</li>
+                </ul>
+              </InfoBtn>
+            </div>
+            <table style={WS.tbl}>
+              <thead><tr><th style={WS.th}>Property</th><th style={WS.th}>Value</th><th style={WS.th}>Source</th></tr></thead>
+              <tbody>
+                {[
+                  ["yarn.resourcemanager.hostname", "hadoop-VirtualBox", "yarn-site.xml"],
+                  ["yarn.nodemanager.resource.memory-mb", "4096", "yarn-site.xml"],
+                  ["yarn.nodemanager.resource.cpu-vcores", "4", "yarn-site.xml"],
+                  ["yarn.scheduler.minimum-allocation-mb", "1024", "yarn-site.xml"],
+                  ["yarn.scheduler.maximum-allocation-mb", "4096", "yarn-site.xml"],
+                  ["yarn.scheduler.minimum-allocation-vcores", "1", "yarn-site.xml"],
+                  ["yarn.scheduler.maximum-allocation-vcores", "4", "yarn-site.xml"],
+                  ["yarn.resourcemanager.scheduler.class", "org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler", "yarn-site.xml"],
+                  ["yarn.nodemanager.aux-services", "mapreduce_shuffle", "yarn-site.xml"],
+                  ["mapreduce.framework.name", "yarn", "mapred-site.xml"],
+                ].map(([k, v, s], i) => (
+                  <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11, fontWeight: 600, color: "#0b7285" }}>{k}</td>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11 }}>{v}</td>
+                    <td style={{ ...WS.td, fontSize: 11, color: "#888" }}>{s}</td>
                   </tr>
+                ))}
+              </tbody>
+            </table>
+          </>}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Job History Server UI (:19888) ──────────────────────────────
+function JobHistoryUI({ services, yarnApps }) {
+  const [section, setSection] = useState("retired");
+  const isUp = services.historyserver;
+  const apps = (yarnApps || []).filter(a => a.state === "FINISHED");
+
+  const SideLink = ({ id, label }) => (
+    <div onClick={() => setSection(id)} style={{ padding: "3px 8px 3px 16px", cursor: "pointer", color: section === id ? "#c85000" : "#4a90d9", textDecoration: "underline", fontSize: 12, fontWeight: section === id ? 700 : 400 }}>{label}</div>
+  );
+
+  if (!isUp) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#f5f5f5", fontFamily: "Verdana, sans-serif" }}>
+      <div style={{ textAlign: "center", color: "#c00" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>⚠</div>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>JobHistoryServer no está activo</div>
+        <div style={{ fontSize: 13, color: "#888", marginTop: 6 }}>Inícialo: <code>mapred historyserver</code></div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#f5f5f5", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 13, color: "#333" }}>
+      {/* Header */}
+      <div style={{ background: "#fff", borderBottom: "3px solid #c85000", padding: "7px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22, fontWeight: 900, color: "#e47a2c", letterSpacing: -1 }}>hadoop</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "#333" }}>JobHistory</span>
+          <span style={{ fontSize: 11, color: "#999", marginLeft: 4 }}>hadoop-VirtualBox:19888</span>
+        </div>
+        <span style={{ fontSize: 11, color: "#aaa" }}>Hadoop 3.4.1 · MapReduce History Server</span>
+      </div>
+
+      <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
+        {/* Sidebar */}
+        <div style={{ width: 160, background: "#fff", borderRight: "1px solid #ddd", flexShrink: 0, paddingTop: 10 }}>
+          <div style={{ padding: "4px 8px", fontWeight: 700, fontSize: 12, color: "#333" }}>▾ Application</div>
+          <SideLink id="about" label="About" />
+          <div style={{ padding: "4px 8px", fontWeight: 700, fontSize: 12, color: "#333", marginTop: 6 }}>▾ Tools</div>
+          <SideLink id="config" label="Configuration" />
+          <SideLink id="logs" label="Local logs" />
+          <SideLink id="stacks" label="Server stacks" />
+          <SideLink id="metrics" label="Server metrics" />
+        </div>
+
+        {/* Main */}
+        <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
+
+          {(section === "retired" || section === "about") && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Retired Jobs</span>
+              <InfoBtn title="Retired Jobs — MapReduce History Server">
+                <p>El <b>JobHistoryServer</b> almacena el historial de todos los jobs MapReduce que han terminado. Cuando YARN elimina la información de una app completada (por timeout), el historial permanece aquí.</p>
+                <p>Se inicia con: <code>mapred historyserver</code></p>
+                <p><b>Retired Jobs:</b> jobs que han completado y cuya información está disponible para consulta. Aquí puedes ver:</p>
+                <ul style={{ paddingLeft: 18 }}>
+                  <li>Tiempo de inicio y fin</li>
+                  <li>Número de Maps y Reduces</li>
+                  <li>Estado final (SUCCEEDED/FAILED/KILLED)</li>
+                </ul>
+                <p>Los logs de cada job se guardan en HDFS bajo <code>/tmp/hadoop-yarn/staging/history/done/</code></p>
+              </InfoBtn>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ padding: "8px 14px", borderBottom: "1px solid #eee", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <span>Show</span>
+                  <select style={{ fontSize: 12, border: "1px solid #ccc", borderRadius: 3, padding: "1px 4px" }}><option>20</option><option>50</option></select>
+                  <span>entries</span>
+                </div>
+                <div style={{ fontSize: 12 }}>Search: <input style={{ border: "1px solid #ccc", borderRadius: 3, padding: "2px 6px", fontSize: 12 }} readOnly /></div>
+              </div>
+              <table style={WS.tbl}>
+                <thead><tr>{["Submit Time", "Start Time", "Finish Time", "Job ID", "Name", "User", "Queue", "State", "Maps Total", "Maps Completed", "Reduces Total", "Reduces Completed", "Elapsed Time"].map(h => <th key={h} style={{ ...WS.th, fontSize: 10 }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {apps.length === 0 && <tr><td colSpan={13} style={{ ...WS.td, textAlign: "center", color: "#888", padding: 20 }}>No data available in table</td></tr>}
+                  {apps.map((app, i) => {
+                    const jid = `job_1700000000000_${String(app.id).padStart(4, "0")}`;
+                    const start = `Tue Mar 03 10:${String(app.id).padStart(2,"0")}:00 COT 2026`;
+                    const fin = `Tue Mar 03 10:${String(app.id + 2).padStart(2,"0")}:35 COT 2026`;
+                    return (
+                      <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
+                        <td style={{ ...WS.td, fontSize: 10 }}>{start}</td>
+                        <td style={{ ...WS.td, fontSize: 10 }}>{start}</td>
+                        <td style={{ ...WS.td, fontSize: 10 }}>{fin}</td>
+                        <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 10, color: "#4a90d9" }}>{jid}</td>
+                        <td style={{ ...WS.td, fontWeight: 600 }}>{app.name}</td>
+                        <td style={WS.td}>hadoop</td>
+                        <td style={WS.td}>default</td>
+                        <td style={{ ...WS.td, color: "#090", fontWeight: 600 }}>SUCCEEDED</td>
+                        <td style={{ ...WS.td, textAlign: "center" }}>4</td>
+                        <td style={{ ...WS.td, textAlign: "center", color: "#090" }}>4</td>
+                        <td style={{ ...WS.td, textAlign: "center" }}>1</td>
+                        <td style={{ ...WS.td, textAlign: "center", color: "#090" }}>1</td>
+                        <td style={{ ...WS.td, fontSize: 10 }}>2m 35s</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ padding: "6px 14px", borderTop: "1px solid #eee", fontSize: 11, color: "#888", display: "flex", justifyContent: "space-between" }}>
+                <span>Showing {apps.length === 0 ? "0 to 0 of 0" : `1 to ${apps.length} of ${apps.length}`} entries</span>
+                <span style={{ color: "#aaa" }}>First Previous Next Last</span>
+              </div>
+            </div>
+          </>}
+
+          {section === "config" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <span style={WS.sTitle}>Configuration</span>
+              <InfoBtn title="MapReduce History Server — Configuración">
+                <p>El JobHistoryServer usa los mismos archivos de configuración que el resto del clúster Hadoop. Los parámetros relevantes están en <b>mapred-site.xml</b> y <b>yarn-site.xml</b>.</p>
+                <p>Parámetros clave:</p>
+                <ul style={{ paddingLeft: 18 }}>
+                  <li><code>mapreduce.jobhistory.address</code>: dirección RPC del servidor (default: 10020)</li>
+                  <li><code>mapreduce.jobhistory.webapp.address</code>: dirección UI web (default: 19888)</li>
+                  <li><code>mapreduce.jobhistory.done-dir</code>: directorio HDFS donde se mueven los logs de jobs completados</li>
+                  <li><code>mapreduce.jobhistory.intermediate-done-dir</code>: directorio temporal mientras el job corre</li>
+                </ul>
+              </InfoBtn>
+            </div>
+            <table style={WS.tbl}>
+              <thead><tr><th style={WS.th}>Property</th><th style={WS.th}>Value</th><th style={WS.th}>Source</th></tr></thead>
+              <tbody>
+                {[
+                  ["mapreduce.jobhistory.address", "hadoop-VirtualBox:10020", "mapred-site.xml"],
+                  ["mapreduce.jobhistory.webapp.address", "hadoop-VirtualBox:19888", "mapred-site.xml"],
+                  ["mapreduce.jobhistory.done-dir", "/mr-history/done", "mapred-site.xml"],
+                  ["mapreduce.jobhistory.intermediate-done-dir", "/mr-history/tmp", "mapred-site.xml"],
+                  ["mapreduce.framework.name", "yarn", "mapred-site.xml"],
+                  ["mapreduce.map.memory.mb", "1024", "mapred-site.xml"],
+                  ["mapreduce.reduce.memory.mb", "2048", "mapred-site.xml"],
+                  ["mapreduce.map.cpu.vcores", "1", "mapred-site.xml"],
+                  ["yarn.app.mapreduce.am.resource.mb", "1024", "mapred-site.xml"],
+                ].map(([k, v, s], i) => (
+                  <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11, fontWeight: 600, color: "#c85000" }}>{k}</td>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11 }}>{v}</td>
+                    <td style={{ ...WS.td, fontSize: 11, color: "#888" }}>{s}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>}
+
+          {section === "logs" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}><span style={WS.sTitle}>Local logs</span><InfoBtn title="Local logs — JobHistoryServer"><p>Logs locales del proceso JobHistoryServer ubicados en el sistema de archivos local del nodo maestro. Útiles para diagnosticar problemas de inicio o configuración del servidor de historial.</p><p>En el simulador, los logs del NodeManager están en <code>/opt/hadoop/logs/</code>.</p></InfoBtn></div>
+            <div style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: 14 }}>
+              <table style={WS.tbl}><thead><tr><th style={WS.th}>Log file</th><th style={WS.th}>Last modified</th><th style={WS.th}>Size</th></tr></thead>
+                <tbody>
+                  {["hadoop-hadoop-historyserver-hadoop-VirtualBox.log", "hadoop-hadoop-historyserver-hadoop-VirtualBox.out"].map((f, i) => (
+                    <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}><td style={{ ...WS.td, color: "#4a90d9" }}>{f}</td><td style={WS.td}>Tue Mar 03 10:00:05 COT 2026</td><td style={WS.td}>{i === 0 ? "48.3 KB" : "1.2 KB"}</td></tr>
+                  ))}
                 </tbody>
               </table>
             </div>
-          </div>
-          {/* Scheduler config */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Scheduler Configuration</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 20px", fontSize: 12, lineHeight: 2, padding: 10, background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
-              <div><b>Scheduler Type:</b> CapacityScheduler</div>
-              <div><b>Scheduling Policy:</b> FIFO within queue</div>
-              <div><b>Min Allocation:</b> &lt;memory:1024, vCores:1&gt;</div>
-              <div><b>Max Allocation:</b> &lt;memory:4096, vCores:4&gt;</div>
-              <div><b>Max Applications:</b> 100</div>
-              <div><b>Node Locality Delay:</b> 40</div>
-              <div><b>Preemption Enabled:</b> false</div>
-              <div><b>Max AM Resource %:</b> 10%</div>
-            </div>
-          </div>
-          {/* Queue resource usage visualization */}
-          <div style={WS.section}>
-            <div style={WS.sTitle}>Queue Resource Usage — root.default</div>
-            <div style={{ display: "flex", gap: 20 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Memory Utilization</div>
-                <div style={{ position: "relative", width: 120, height: 120, margin: "0 auto" }}>
-                  <svg viewBox="0 0 36 36" style={{ width: 120, height: 120, transform: "rotate(-90deg)" }}>
-                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#eee" strokeWidth="3" />
-                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#0b7285" strokeWidth="3" strokeDasharray={`${(memUsed / memTotal) * 100}, 100`} />
-                  </svg>
-                  <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center" }}>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{((memUsed / memTotal) * 100).toFixed(0)}%</div>
-                    <div style={{ fontSize: 9, color: "#888" }}>of {(memTotal / 1024).toFixed(0)} GB</div>
-                  </div>
-                </div>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>VCore Utilization</div>
-                <div style={{ position: "relative", width: 120, height: 120, margin: "0 auto" }}>
-                  <svg viewBox="0 0 36 36" style={{ width: 120, height: 120, transform: "rotate(-90deg)" }}>
-                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#eee" strokeWidth="3" />
-                    <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#9b59b6" strokeWidth="3" strokeDasharray={`${(vcUsed / vcTotal) * 100}, 100`} />
-                  </svg>
-                  <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center" }}>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{((vcUsed / vcTotal) * 100).toFixed(0)}%</div>
-                    <div style={{ fontSize: 9, color: "#888" }}>of {vcTotal} cores</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>}
+          </>}
+
+          {section === "stacks" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}><span style={WS.sTitle}>Server stacks</span><InfoBtn title="Server stacks"><p>Lista de todos los <b>hilos Java</b> activos en el proceso JobHistoryServer y su estado actual. Útil para diagnosticar deadlocks o problemas de rendimiento.</p><p>Los estados posibles son: RUNNABLE, WAITING, TIMED_WAITING, BLOCKED.</p></InfoBtn></div>
+            <pre style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: 14, fontSize: 11, fontFamily: "monospace", overflow: "auto", lineHeight: 1.5 }}>{`"main" #1 prio=5 os_prio=0 tid=0x00007f RUNNABLE
+  at java.lang.Thread.sleep(Native Method)
+  at org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer.main
+
+"IPC Server listener on 10020" #23 prio=5 RUNNABLE
+  at sun.nio.ch.EPollArrayWrapper.epollWait(Native Method)
+  at org.apache.hadoop.ipc.Server$Listener.run
+
+"WebApp" #45 prio=5 WAITING
+  at java.lang.Object.wait(Object.java:502)
+  at org.apache.hadoop.http.HttpServer2$SelectChannelConnectorWithSafeStartup`}</pre>
+          </>}
+
+          {section === "metrics" && <>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}><span style={WS.sTitle}>Server metrics (JMX)</span><InfoBtn title="JMX Metrics"><p><b>JMX (Java Management Extensions)</b> expone métricas internas del proceso Java en tiempo real. El JobHistoryServer publica métricas como uso de memoria JVM, threads activos, y contadores de jobs procesados.</p><p>Accesible en producción en: <code>http://hadoop-VirtualBox:19888/jmx</code></p></InfoBtn></div>
+            <table style={WS.tbl}>
+              <thead><tr><th style={WS.th}>Metric</th><th style={WS.th}>Value</th></tr></thead>
+              <tbody>
+                {[["HeapMemoryUsage.used", "128 MB"], ["HeapMemoryUsage.max", "512 MB"], ["NonHeapMemoryUsage.used", "64 MB"], ["ThreadCount", "42"], ["DaemonThreadCount", "38"], ["LoadedClassCount", "8234"], ["JobsSubmitted", apps.length], ["JobsCompleted", apps.length], ["JobsFailed", 0], ["JobsKilled", 0]].map(([k, v], i) => (
+                  <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11, fontWeight: 600 }}>{k}</td>
+                    <td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11 }}>{String(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>}
+        </div>
       </div>
     </div>
   );
@@ -738,7 +1108,7 @@ export default function HadoopVMSimulator() {
         const flag = tokens[2];
         if (flag === "-ls") { const t = tokens[3] || "/"; const n = hdfsFS[t]; if (!n) return [out(`ls: '${t}': No such file or directory`, "error")]; if (n.type === "dir") { const items = n.children || []; if (items.length === 0) return [out("Found 0 items")]; return [out(`Found ${items.length} items\n${items.map(i => { const cp = t === "/" ? `/${i}` : `${t}/${i}`; const cn = hdfsFS[cp]; if (cn?.type === "dir") return `drwxr-xr-x   - hadoop supergroup          0 2026-02-28 10:00 ${cp}`; return `-rw-r--r--   2 hadoop supergroup     ${String(cn?.size || 1024).padStart(8)} 2026-02-28 10:00 ${cp}`; }).join("\n")}`)]; } return [out(`-rw-r--r--   2 hadoop supergroup     ${n.size || 0} 2026-02-28 10:00 ${t}`)]; }
         if (flag === "-mkdir") { let nf = { ...hdfsFS }; for (const p of tokens.slice(3).filter(t => !t.startsWith("-"))) nf = ensureHdfsDir(p, nf); setHdfsFS(nf); return []; }
-        if (flag === "-put") { const lp = tokens[3]; const hp = tokens[4]; if (!lp || !hp) return [out("Usage: hdfs dfs -put <localsrc> <dst>", "error")]; const rl = resolvePath(lp, cwd); const ln = getLocalNode(rl); if (!ln) return [out(`put: '${lp}': No such file`, "error")]; let nf = { ...hdfsFS }; const hpp = hp.replace(/\/$/, ""); if (!nf[hpp]) nf = ensureHdfsDir(hpp, nf); if (ln.type === "file") { const fn = rl.substring(rl.lastIndexOf("/") + 1); const fp = `${hpp}/${fn}`; nf[fp] = { type: "file", content: ln.content, size: (ln.content || "").length, owner: "hadoop", group: "supergroup" }; if (nf[hpp]) nf[hpp] = { ...nf[hpp], children: [...new Set([...(nf[hpp].children || []), fn])] }; } setHdfsFS(nf);
+        if (flag === "-put") { const lp = tokens[3]; const hp = tokens[4]; if (!lp || !hp) return [out("Usage: hdfs dfs -put <localsrc> <dst>", "error")]; const rl = resolvePath(lp, cwd); const ln = getLocalNode(rl); if (!ln) return [out(`put: '${lp}': No such file or directory\n  (ruta resuelta: ${rl})`, "error")]; let nf = { ...hdfsFS }; const hpp = hp.replace(/\/$/, ""); if (!nf[hpp]) nf = ensureHdfsDir(hpp, nf); if (ln.type === "file") { const fn = rl.substring(rl.lastIndexOf("/") + 1); const fp = `${hpp}/${fn}`; nf[fp] = { type: "file", content: ln.content, size: (ln.content || "").length, owner: "hadoop", group: "supergroup" }; if (nf[hpp]) nf[hpp] = { ...nf[hpp], children: [...new Set([...(nf[hpp].children || []), fn])] }; } setHdfsFS(nf);
           // Create block files in datanode finalized/subdir0/subdir0
           const sd0 = "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0/subdir0";
           const blkId = Date.now();
@@ -778,12 +1148,17 @@ export default function HadoopVMSimulator() {
     }
 
     // hadoop jar
+    if (base === "hadoop" && (tokens[1] === "fs" || tokens[1] === "dfs")) {
+      // hadoop fs / hadoop dfs → alias de hdfs dfs
+      return processCommand("hdfs dfs " + tokens.slice(2).join(" "));
+    }
     if (base === "hadoop" && tokens[1] === "jar") {
       if (!services.resourcemanager) return [out("Error: YARN no está activo.", "error")]; const jar = tokens[2] || ""; const jt = tokens[3] || "";
       if (jar.includes("tests.jar") || jt === "TestDFSIO") { const mode = tokens.includes("-write") ? "write" : "read"; const nrF = parseInt(tokens.find((t, i) => tokens[i - 1] === "-nrFiles") || "10"); const fS = parseInt(tokens.find((t, i) => tokens[i - 1] === "-fileSize") || "100"); const aid = appCounter; setAppCounter(c => c + 1); setYarnApps(prev => [...prev, { id: aid, name: `TestDFSIO-${mode}`, state: "FINISHED" }]); let nf = ensureHdfsDir("/benchmarks/TestDFSIO", { ...hdfsFS }); nf[`/benchmarks/TestDFSIO/io_${mode}`] = { type: "file", content: genBenchmark(mode, nrF, fS), size: 512, owner: "hadoop", group: "supergroup" }; if (!nf["/benchmarks"].children.includes("TestDFSIO")) nf["/benchmarks"] = { ...nf["/benchmarks"], children: [...nf["/benchmarks"].children, "TestDFSIO"] }; setHdfsFS(nf); return [out(`Job completed successfully.\n\n${genBenchmark(mode, nrF, fS)}`, "success")]; }
       if (jt === "grep") { const inp = tokens[4]; const outp = tokens[5]; const regex = tokens.slice(6).join(" ").replace(/^['"]|['"]$/g, ""); if (!inp || !outp) return [out("Usage: hadoop jar <jar> grep <in> <out> '<regex>'", "error")]; if (hdfsFS[outp]) return [out(`Output ${outp} already exists. Bórralo: hdfs dfs -rm -r ${outp}`, "error")]; const inode = hdfsFS[inp]; if (!inode) return [out(`Input path not found: ${inp}`, "error")]; let all = ""; if (inode.type === "dir") { for (const ch of (inode.children || [])) { const cp = `${inp}/${ch}`; if (hdfsFS[cp]?.content) all += hdfsFS[cp].content + "\n"; } } else all = inode.content || ""; let matches = {}; try { const re = new RegExp(regex, "gi"); for (const line of all.split("\n")) { const m = line.match(re); if (m) for (const x of m) matches[x.toLowerCase()] = (matches[x.toLowerCase()] || 0) + 1; } } catch {} const sorted = Object.entries(matches).sort((a, b) => b[1] - a[1]); const rc = sorted.length > 0 ? sorted.map(([k, v]) => `${v}\t${k}`).join("\n") : "(sin coincidencias)"; let nf = ensureHdfsDir(outp, { ...hdfsFS }); nf[`${outp}/part-r-00000`] = { type: "file", content: rc, size: rc.length, owner: "hadoop", group: "supergroup" }; nf[`${outp}/_SUCCESS`] = { type: "file", content: "", size: 0, owner: "hadoop", group: "supergroup" }; nf[outp] = { ...nf[outp], children: [...new Set([...(nf[outp].children || []), "part-r-00000", "_SUCCESS"])] }; setHdfsFS(nf); const aid = appCounter; setAppCounter(c => c + 1); setYarnApps(prev => [...prev, { id: aid, name: "grep-search", state: "FINISHED" }]); return [out(`Job completed successfully.\n\n✓ Verifica: hdfs dfs -cat ${outp}/part-r-00000 | head`, "success")]; }
       if (tokens.length >= 5) { const inp = tokens[tokens.length - 2]; const outp = tokens[tokens.length - 1]; if (hdfsFS[outp]) return [out(`Output ${outp} already exists.`, "error")]; const inode = hdfsFS[inp]; if (!inode) return [out(`Input not found: ${inp}`, "error")]; let all = ""; if (inode.type === "dir") { for (const ch of (inode.children || [])) { const p = `${inp}/${ch}`; if (hdfsFS[p]?.content) all += hdfsFS[p].content + "\n"; } } else all = inode.content || ""; const words = {}; all.split(/\s+/).filter(Boolean).forEach(w => { const k = w.replace(/[^a-zA-Z0-9_.-]/g, ""); if (k) words[k] = (words[k] || 0) + 1; }); const rc = Object.entries(words).sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => `${k}\t${v}`).join("\n"); let nf = ensureHdfsDir(outp, { ...hdfsFS }); nf[`${outp}/part-r-00000`] = { type: "file", content: rc, size: rc.length, owner: "hadoop", group: "supergroup" }; nf[`${outp}/_SUCCESS`] = { type: "file", content: "", size: 0, owner: "hadoop", group: "supergroup" }; nf[outp] = { ...nf[outp], children: ["part-r-00000", "_SUCCESS"] }; setHdfsFS(nf); const aid = appCounter; setAppCounter(c => c + 1); setYarnApps(prev => [...prev, { id: aid, name: jt || "wordcount", state: "FINISHED" }]); return [out(`Job completed successfully.\n\n✓ Verifica: hdfs dfs -cat ${outp}/part-r-00000 | head`, "success")]; }
-      return [out("hadoop jar: Usa grep, wordcount, o TestDFSIO.", "error")];
+      if (jar.includes("examples") && !jt) return [out(`An example program must be given as the first argument.\nValid program names are:\n  aggregatewordcount: An Aggregate based map/reduce program that counts the words in the input files.\n  aggregatewordhist: An Aggregate based map/reduce program that computes the histogram of the words in the input files.\n  bbp: A map/reduce program that uses Bailey-Borwein-Plouffe to compute exact digits of Pi.\n  dbcount: An example job that count the pageview counts from a database.\n  distbbp: A map/reduce program that uses Bailey-Borwein-Plouffe to compute exact digits of Pi.\n  grep: A map/reduce program that counts the matches of a regex in the input.\n  join: A job that effects a join over sorted, equally partitioned datasets\n  multifilewc: A job that counts words from several files.\n  pentomino: A map/reduce tile laying program to find solutions to pentomino problems.\n  pi: A map/reduce program that estimates Pi using a quasi-Monte Carlo method.\n  randomtextwriter: A map/reduce program that writes 10GB of random textual data per node.\n  randomwriter: A map/reduce program that writes 10GB of random data per node.\n  secondarysort: An example defining a secondary sort to the reduce.\n  sort: A map/reduce program that sorts the data written by the random writer.\n  sudoku: A sudoku solver.\n  teragen: Generate data for the terasort\n  terasort: Run the terasort\n  teravalidate: Checking results of terasort\n  wordcount: A map/reduce program that counts the words in the input files.\n  wordmean: A map/reduce program that counts the average length of the words in the input files.\n  wordmedian: A map/reduce program that counts the median length of the words in the input files.\n  wordstandarddeviation: A map/reduce program that counts the standard deviation of the length of the words in the input files.`, "output")];
+      return [out(`Usage: hadoop jar <jar> [mainClass] args...`, "error")];
     }
     if (base === "javac") { const f = tokens.find(t => t.endsWith(".java")); if (!f) return [out("javac: no source files", "error")]; const nm = f.replace(".java", ""); let nf = { ...localFS }; if (nf[cwd]) { const cls = [`${nm}.class`, `${nm}$TokenizerMapper.class`, `${nm}$IntSumReducer.class`]; nf[cwd] = { ...nf[cwd], children: [...new Set([...(nf[cwd].children || []), ...cls])], files: { ...(nf[cwd].files || {}), ...Object.fromEntries(cls.map(c => [c, `[bytecode: ${c}]`])) } }; } setLocalFS(nf); return [out(`✓ Compilación exitosa`, "success")]; }
     if (base === "jar" && tokens[1] === "cf") { const jn = tokens[2]; if (!jn) return [out("jar: faltan argumentos", "error")]; let nf = { ...localFS }; if (nf[cwd]) nf[cwd] = { ...nf[cwd], children: [...new Set([...(nf[cwd].children || []), jn])], files: { ...(nf[cwd].files || {}), [jn]: `[JAR: ${jn}]` } }; setLocalFS(nf); return [out(`✓ ${jn} creado`, "success")]; }
@@ -901,18 +1276,21 @@ export default function HadoopVMSimulator() {
       {/* ══ TABS ══ */}
       <div style={{ background: "#0f0f0f", borderBottom: "1px solid #1a1a1a", padding: "0 4px", display: "flex", fontSize: 11, flexShrink: 0 }}>
         {[
-          ["terminal", "💻 Terminal"],
-          ["hdfs", "🐘 HDFS :9870"],
-          ["yarn", "🧶 YARN :8088"],
-          ["guide", "📖 Guía"],
-        ].map(([id, label]) => (
-          <button key={id} onClick={() => setActiveTab(id)} style={{ padding: "7px 12px", background: activeTab === id ? (id === "hdfs" || id === "yarn" ? "#f8f8f8" : "#1a1a1a") : "transparent", color: activeTab === id ? (id === "hdfs" || id === "yarn" ? "#333" : "#e0e0e0") : "#666", border: "none", borderBottom: activeTab === id ? `2px solid ${id === "hdfs" ? "#e47a2c" : id === "yarn" ? "#0b7285" : "#e2854b"}` : "2px solid transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>{label}</button>
-        ))}
+          ["terminal", "💻 Terminal", "#e2854b"],
+          ["hdfs", "🐘 HDFS :9870", "#e47a2c"],
+          ["yarn", "🧶 YARN :8088", "#0b7285"],
+          ["history", "📋 History :19888", "#c85000"],
+          ["guide", "📖 Guía", "#e2854b"],
+        ].map(([id, label, accent]) => {
+          const isWeb = id === "hdfs" || id === "yarn" || id === "history";
+          return <button key={id} onClick={() => setActiveTab(id)} style={{ padding: "7px 12px", background: activeTab === id ? (isWeb ? "#f8f8f8" : "#1a1a1a") : "transparent", color: activeTab === id ? (isWeb ? "#333" : "#e0e0e0") : "#666", border: "none", borderBottom: activeTab === id ? `2px solid ${accent}` : "2px solid transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>{label}</button>;
+        })}
       </div>
 
       {/* ══ CONTENT ══ */}
       {activeTab === "hdfs" && <HdfsWebUI services={services} hdfsFS={hdfsFS} safeMode={safeMode} hdfsSnapEnabled={hdfsSnapEnabled} fsimageCounter={fsimageCounter} />}
       {activeTab === "yarn" && <YarnWebUI services={services} yarnApps={yarnApps} />}
+      {activeTab === "history" && <JobHistoryUI services={services} yarnApps={yarnApps} />}
 
       {activeTab === "guide" && (
         <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", fontSize: 12, lineHeight: 1.7, color: "#bbb" }}>
