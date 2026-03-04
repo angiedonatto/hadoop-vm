@@ -548,6 +548,7 @@ export default function HadoopVMSimulator() {
   const [activeTab, setActiveTab] = useState("terminal");
   const termRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
 
   // ── Load from persistent storage ──
@@ -775,6 +776,27 @@ export default function HadoopVMSimulator() {
 
   const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); else if (e.key === "ArrowUp") { e.preventDefault(); if (history.length > 0) { const ni = Math.min(histIdx + 1, history.length - 1); setHistIdx(ni); setInput(history[ni]); } } else if (e.key === "ArrowDown") { e.preventDefault(); if (histIdx > 0) { setHistIdx(histIdx - 1); setInput(history[histIdx - 1]); } else { setHistIdx(-1); setInput(""); } } else if (e.key === "Tab") { e.preventDefault(); handleTab(); } };
 
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const content = ev.target.result;
+      const name = file.name;
+      const destDir = sshNode ? null : cwd;
+      if (!destDir) { setLines(prev => [...prev, out(`upload: no disponible en SSH`, "error")]); return; }
+      setLocalFS(prev => {
+        const nf = { ...prev };
+        const dir = nf[destDir] || { type: "dir", children: [], files: {} };
+        const newChildren = dir.children.includes(name) ? dir.children : [...dir.children, name];
+        nf[destDir] = { ...dir, children: newChildren, files: { ...(dir.files || {}), [name]: content } };
+        return nf;
+      });
+      setLines(prev => [...prev, out(`Archivo cargado: ${destDir}/${name} (${file.size} bytes)`, "success")]);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
   const svcDot = (on) => <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: on ? "#4ade80" : "#ef4444", marginRight: 4, boxShadow: on ? "0 0 6px #4ade80" : "0 0 4px #ef4444" }} />;
 
   if (!localFS || !hdfsFS) return <div style={{ background: "#0d0d0d", color: "#ccc", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "monospace" }}>Cargando...</div>;
@@ -863,6 +885,8 @@ export default function HadoopVMSimulator() {
             <span style={{ color: "#83a598", fontSize: 12.5, flexShrink: 0 }}>{cwdD}</span>
             <span style={{ color: "#e0e0e0", margin: "0 4px 0 2px", fontSize: 12.5 }}>$</span>
             <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} autoFocus spellCheck={false} style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "inherit", fontSize: 12.5, caretColor: "#e2854b", lineHeight: 1.5, padding: 0, margin: 0 }} />
+            <input ref={fileInputRef} type="file" onChange={handleFileUpload} style={{ display: "none" }} />
+            <button onClick={() => fileInputRef.current?.click()} title={`Cargar archivo en ${cwdD}`} style={{ flexShrink: 0, marginLeft: 6, background: "transparent", border: "1px solid #444", borderRadius: 3, color: "#888", cursor: "pointer", fontSize: 11, padding: "1px 6px", lineHeight: 1.4 }}>↑ upload</button>
           </div>
         </div>
       )}
