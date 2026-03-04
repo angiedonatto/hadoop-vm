@@ -174,7 +174,12 @@ export default function HadoopVMSimulator() {
     const nm = path.substring(path.lastIndexOf("/") + 1);
     const pn = localFS[par];
     if (pn?.files && nm in pn.files) return { type: "file", content: pn.files[nm] };
-    if (pn?.children?.includes(nm)) return { type: "dir_ref" };
+    // If it's in children but NOT a known directory key and NOT in files, treat as empty file
+    if (pn?.children?.includes(nm)) {
+      const fullPath = par === "/" ? `/${nm}` : `${par}/${nm}`;
+      if (localFS[fullPath]) return localFS[fullPath]; // it's a subdirectory
+      return { type: "file", content: "" }; // file in children but no content yet
+    }
     return null;
   }, [localFS]);
 
@@ -423,11 +428,57 @@ export default function HadoopVMSimulator() {
     if (base === "mkdir") { const dirs = tokens.filter((t, i) => i > 0 && !t.startsWith("-")); if (dirs.length === 0) return [out("mkdir: falta un operando", "error")]; let nf = { ...localFS }; for (const d of dirs) { const r = resolvePath(d, cwd); if (!nf[r]) nf = ensureLocalDir(r, nf); } setLocalFS(nf); return []; }
     if (base === "touch") { const files = tokens.slice(1).filter(t => !t.startsWith("-")); let nf = { ...localFS }; for (const f of files) { const r = resolvePath(f, cwd); const par = r.substring(0, r.lastIndexOf("/")) || "/"; const nm = r.substring(r.lastIndexOf("/") + 1); if (!nf[par]) nf = ensureLocalDir(par, nf); if (nf[par]) nf[par] = { ...nf[par], files: { ...(nf[par].files || {}), [nm]: "" }, children: [...new Set([...(nf[par].children || []), nm])] }; } setLocalFS(nf); return []; }
     if (base === "cat") {
-      const target = tokens[1]; if (!target) return [out("cat: falta un operando", "error")];
-      const nd = getLocalNode(resolvePath(target, cwd));
-      if (!nd) return [out(`cat: ${target}: No existe el archivo o el directorio`, "error")]; if (nd.type !== "file") return [out(`cat: ${target}: Es un directorio`, "error")];
-      let c = nd.content || "";
-      for (let pi = 1; pi < pipes.length; pi++) { const pt = pipes[pi].trim(); if (pt.startsWith("head")) { const n = parseInt(pt.match(/-n?\s*(\d+)/)?.[1] || pt.match(/-(\d+)/)?.[1]) || 10; c = c.split("\n").slice(0, n).join("\n"); } else if (pt.startsWith("tail")) { const n = parseInt(pt.match(/-n?\s*(\d+)/)?.[1] || pt.match(/-(\d+)/)?.[1]) || 10; c = c.split("\n").slice(-n).join("\n"); } else if (pt.startsWith("wc")) { const l = c.split("\n").length; const w = c.split(/\s+/).filter(Boolean).length; c = `  ${l}  ${w} ${c.length}`; } else if (pt.startsWith("grep")) { const gt = parseTokens(pt); const pat = gt[1] || ""; try { const re = new RegExp(pat, "gi"); c = c.split("\n").filter(l => re.test(l)).join("\n"); } catch {} } }
+      const targets = tokens.filter((t, i) => i > 0 && !t.startsWith("-"));
+      if (targets.length === 0) return [out("cat: falta un operando", "error")];
+      // Concatenate content from all target files
+      let c = "";
+      for (let fi = 0; fi < targets.length; fi++) {
+        const target = targets[fi];
+        const resolved = resolvePath(target, cwd);
+        const nd = getLocalNode(resolved);
+        if (!nd) return [out(`cat: ${target}: No existe el archivo o el directorio`, "error")];
+        if (nd.type === "dir") return [out(`cat: ${target}: Es un directorio`, "error")];
+        if (fi > 0) c += "\n";
+        c += nd.content || "";
+      }
+      // Apply pipe chain
+      for (let pi = 1; pi < pipes.length; pi++) {
+        const pt = pipes[pi].trim();
+        if (pt.startsWith("head")) {
+          const n = parseInt(pt.match(/-n?\s*(\d+)/)?.[1] || pt.match(/-(\d+)/)?.[1]) || 10;
+          c = c.split("\n").slice(0, n).join("\n");
+        } else if (pt.startsWith("tail")) {
+          const n = parseInt(pt.match(/-n?\s*(\d+)/)?.[1] || pt.match(/-(\d+)/)?.[1]) || 10;
+          c = c.split("\n").slice(-n).join("\n");
+        } else if (pt.startsWith("wc")) {
+          const wcFlags = pt.includes("-l") ? "l" : pt.includes("-w") ? "w" : pt.includes("-c") ? "c" : "";
+          const ls = c.split("\n").length;
+          const ws = c.split(/\s+/).filter(Boolean).length;
+          if (wcFlags === "l") c = `  ${ls}`;
+          else if (wcFlags === "w") c = `  ${ws}`;
+          else if (wcFlags === "c") c = `  ${c.length}`;
+          else c = `  ${ls}  ${ws} ${c.length}`;
+        } else if (pt.startsWith("grep")) {
+          const gt = parseTokens(pt);
+          const gFlags = gt.filter(t => t.startsWith("-")).map(t => t.replace(/^-+/, "")).join("");
+          const pat = gt.find((t, i) => i > 0 && !t.startsWith("-")) || "";
+          try {
+            const re = new RegExp(pat, gFlags.includes("i") ? "gi" : "g");
+            let matched = c.split("\n").filter(l => re.test(l));
+            if (gFlags.includes("v")) matched = c.split("\n").filter(l => !new RegExp(pat, gFlags.includes("i") ? "gi" : "g").test(l));
+            if (gFlags.includes("c")) { c = String(matched.length); }
+            else c = matched.join("\n");
+          } catch { c = `grep: regex inválida: '${pat}'`; }
+        } else if (pt.startsWith("sort")) {
+          const lines = c.split("\n");
+          lines.sort((a, b) => a.localeCompare(b));
+          if (pt.includes("-r")) lines.reverse();
+          if (pt.includes("-n")) lines.sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
+          c = lines.join("\n");
+        } else if (pt.startsWith("uniq")) {
+          c = c.split("\n").filter((l, i, arr) => i === 0 || l !== arr[i - 1]).join("\n");
+        }
+      }
       return [out(c)];
     }
     if (base === "head") { const target = tokens.find((t, i) => i > 0 && !t.startsWith("-")); if (!target) return [out("head: falta un operando", "error")]; let n = 10; const nf = tokens.find(t => /^-\d+$/.test(t)); const dn = tokens.indexOf("-n"); if (nf) n = parseInt(nf.slice(1)); else if (dn >= 0 && tokens[dn + 1]) n = parseInt(tokens[dn + 1]); const nd = getLocalNode(resolvePath(target, cwd)); if (!nd || nd.type !== "file") return [out(`head: ${target}: No existe`, "error")]; return [out((nd.content || "").split("\n").slice(0, n).join("\n"))]; }
