@@ -28,7 +28,8 @@ function createInitialState() {
     "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000": { type: "dir", children: ["current", "tmp"] },
     "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current": { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } },
     "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized": { type: "dir", children: ["subdir0"] },
-    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0": { type: "dir", children: [] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0": { type: "dir", children: ["subdir0"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0/subdir0": { type: "dir", children: [], files: {} },
     "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/rbw": { type: "dir", children: [] },
     "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/tmp": { type: "dir", children: [] },
     "/etc": { type: "dir", children: ["hosts", "hostname"], files: { hosts: "127.0.0.1   localhost\n127.0.1.1   hadoop-VirtualBox\n192.168.56.10 hadoop-VirtualBox\n192.168.56.11 nodo2\n192.168.56.12 nodo3", hostname: "hadoop-VirtualBox" } },
@@ -575,9 +576,17 @@ export default function HadoopVMSimulator() {
             lfs[bp] = { type: "dir", children: ["current", "tmp"] };
             lfs[bp + "/current"] = { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } };
             lfs[bp + "/current/finalized"] = { type: "dir", children: ["subdir0"] };
-            lfs[bp + "/current/finalized/subdir0"] = { type: "dir", children: [] };
+            lfs[bp + "/current/finalized/subdir0"] = { type: "dir", children: ["subdir0"] };
+            lfs[bp + "/current/finalized/subdir0/subdir0"] = { type: "dir", children: [], files: {} };
             lfs[bp + "/current/rbw"] = { type: "dir", children: [] };
             lfs[bp + "/tmp"] = { type: "dir", children: [] };
+          } else {
+            // Fix subdir0/subdir0 if missing
+            const sd0 = bp + "/current/finalized/subdir0";
+            if (lfs[sd0] && !lfs[sd0 + "/subdir0"]) {
+              lfs[sd0] = { ...lfs[sd0], children: ["subdir0"] };
+              lfs[sd0 + "/subdir0"] = { type: "dir", children: [], files: {} };
+            }
           }
           setLocalFS(lfs);
         }
