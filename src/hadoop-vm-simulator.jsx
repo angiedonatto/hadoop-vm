@@ -5,7 +5,11 @@ function createInitialState() {
   const localFS = {
     "/": { type: "dir", children: ["opt", "tmp", "home", "datos", "etc", "var", "usr", "bin", "sbin"] },
     "/opt": { type: "dir", children: ["hadoop"] },
-    "/opt/hadoop": { type: "dir", children: ["sbin", "etc", "share", "logs", "bin"] },
+    "/opt/hadoop": { type: "dir", children: ["sbin", "etc", "share", "logs", "bin", "hive"] },
+    "/opt/hadoop/hive": { type: "dir", children: ["bbdd", "conf", "lib"] },
+    "/opt/hadoop/hive/bbdd": { type: "dir", children: ["derby.log", "metastore_db"], files: { "derby.log": "----------------------------------------------------------------\nUsing Derby version 10.14.2.0\njava.vendor=Ubuntu\nos.name=Linux" } },
+    "/opt/hadoop/hive/conf": { type: "dir", children: ["hive-site.xml"], files: { "hive-site.xml": "<configuration>\n  <property>\n    <name>javax.jdo.option.ConnectionURL</name>\n    <value>jdbc:derby:;databaseName=/opt/hadoop/hive/bbdd/metastore_db;create=true</value>\n  </property>\n  <property>\n    <name>hive.server2.thrift.port</name>\n    <value>10000</value>\n  </property>\n  <property>\n    <name>hive.server2.webui.port</name>\n    <value>10002</value>\n  </property>\n</configuration>" } },
+    "/opt/hadoop/hive/lib": { type: "dir", children: ["hive-exec.jar", "hive-metastore.jar", "hive-jdbc.jar"] },
     "/opt/hadoop/sbin": { type: "dir", children: ["start-dfs.sh", "stop-dfs.sh", "start-yarn.sh", "stop-yarn.sh"], files: { "start-dfs.sh": "#!/bin/bash\n# Start HDFS daemons", "stop-dfs.sh": "#!/bin/bash\n# Stop HDFS", "start-yarn.sh": "#!/bin/bash\n# Start YARN", "stop-yarn.sh": "#!/bin/bash\n# Stop YARN" } },
     "/opt/hadoop/bin": { type: "dir", children: ["hadoop", "hdfs", "yarn", "mapred"] },
     "/opt/hadoop/etc": { type: "dir", children: ["hadoop"] },
@@ -896,6 +900,109 @@ function JobHistoryUI({ services, yarnApps }) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// HIVESERVER2 WEB UI (:10002)
+// ══════════════════════════════════════════════════════════════════
+function HiveWebUI({ hiveServices, hiveDBs, currentHiveDB, hiveQueries }) {
+  const [subTab, setSubTab] = useState("home");
+  const isUp = hiveServices.hiveserver2;
+
+  if (!isUp) return <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", fontFamily: "Verdana, sans-serif" }}><div style={{ textAlign: "center", color: "#c00" }}><div style={{ fontSize: 48, marginBottom: 12 }}>⚠</div><div style={{ fontSize: 16, fontWeight: 600 }}>HiveServer2 no está activo</div><div style={{ fontSize: 13, color: "#888", marginTop: 6 }}>Inicia Hive:<br/><code>cd /opt/hadoop/hive/bbdd</code><br/><code>hiveserver2</code><br/>Luego: <code>beeline</code></div></div></div>;
+
+  const allTables = Object.entries(hiveDBs).flatMap(([db, d]) => Object.keys(d.tables).map(t => ({ db, table: t, cols: d.tables[t].columns.length, rows: d.tables[t].rows.length })));
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: "#fafafa", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 13, color: "#333" }}>
+      <div style={{ background: "#f8f8f8", borderBottom: "3px solid #f5a623", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18, fontWeight: 700, color: "#f5a623" }}>🐝 Hive</span>
+          <span style={{ fontSize: 13, color: "#666" }}>HiveServer2 — hadoop-VirtualBox:10002</span>
+        </div>
+        <span style={{ fontSize: 11, color: "#999" }}>Apache Hive 4.0.0 | Metastore: Derby</span>
+      </div>
+      <div style={{ display: "flex", gap: 0, background: "#e8e8e8", borderBottom: "1px solid #ccc", fontSize: 12 }}>
+        {[["home", "Home"], ["sessions", "Active Sessions"], ["queries", "Open Queries"], ["config", "Hive Configuration"], ["databases", "Databases"]].map(([id, l]) => (
+          <button key={id} onClick={() => setSubTab(id)} style={{ padding: "7px 14px", background: subTab === id ? "#fff" : "transparent", color: subTab === id ? "#333" : "#666", border: "none", borderBottom: subTab === id ? "2px solid #f5a623" : "2px solid transparent", cursor: "pointer", fontSize: 12, fontFamily: "Verdana, sans-serif", fontWeight: subTab === id ? 600 : 400 }}>{l}</button>
+        ))}
+      </div>
+      <div style={{ padding: "12px 18px" }}>
+        {subTab === "home" && <>
+          <h2 style={{ fontSize: 18, margin: "0 0 16px" }}>HiveServer2</h2>
+          <div style={{ margin: "16px 0" }}>
+            <h3 style={{ fontSize: 15, margin: "0 0 10px", borderBottom: "1px solid #ddd", paddingBottom: 4 }}>Active Sessions</h3>
+            <table style={WS.tbl}>
+              <thead><tr>{["User Name", "IP Address", "Operation Count", "Active Time (s)", "Idle Time (s)"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <tbody><tr><td style={WS.td}>hadoop</td><td style={WS.td}>192.168.56.10</td><td style={WS.td}>{hiveQueries.length}</td><td style={WS.td}>{Math.floor((Date.now() % 100000) / 100)}</td><td style={WS.td}>{Math.floor(Math.random() * 60)}</td></tr></tbody>
+            </table>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>Total number of sessions: 1</div>
+          </div>
+          <div style={{ margin: "16px 0" }}>
+            <h3 style={{ fontSize: 15, margin: "0 0 10px", borderBottom: "1px solid #ddd", paddingBottom: 4 }}>Open Queries</h3>
+            <table style={WS.tbl}>
+              <thead><tr>{["User Name", "Query", "Execution Engine", "State", "Opened Timestamp", "Latency (s)"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+              <tbody>{hiveQueries.length === 0 ? <tr><td colSpan={6} style={{ ...WS.td, textAlign: "center", color: "#888" }}>No open queries</td></tr> : hiveQueries.slice(-5).map((q, i) => <tr key={i}><td style={WS.td}>hadoop</td><td style={{ ...WS.td, fontSize: 11, fontFamily: "monospace", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.q.slice(0, 50)}</td><td style={WS.td}>mr</td><td style={{ ...WS.td, color: "#090" }}>{q.state}</td><td style={{ ...WS.td, fontSize: 11 }}>Tue Mar 03 10:{String(i * 5).padStart(2, "0")}:00</td><td style={WS.td}>{(Math.random() * 5).toFixed(1)}</td></tr>)}</tbody>
+            </table>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>Total number of queries: {hiveQueries.length}</div>
+          </div>
+        </>}
+        {subTab === "sessions" && <>
+          <h3 style={{ fontSize: 15, margin: "0 0 10px" }}>Session Details</h3>
+          <div style={{ padding: 12, background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 20px", fontSize: 12.5, lineHeight: 2 }}>
+              <div><b>Session ID:</b> a0628847-8b04-46f5-903b-673c74a8986e</div>
+              <div><b>User:</b> hadoop</div>
+              <div><b>IP Address:</b> 192.168.56.10</div>
+              <div><b>Current Database:</b> {currentHiveDB}</div>
+              <div><b>Connection URL:</b> jdbc:hive2://hadoop-virtualbox:10000</div>
+              <div><b>Driver:</b> Hive JDBC 4.0.0</div>
+              <div><b>Queries Executed:</b> {hiveQueries.length}</div>
+              <div><b>Transaction Isolation:</b> REPEATABLE_READ</div>
+            </div>
+          </div>
+        </>}
+        {subTab === "queries" && <>
+          <h3 style={{ fontSize: 15, margin: "0 0 10px" }}>Query History</h3>
+          <table style={WS.tbl}>
+            <thead><tr>{["#", "Database", "Query", "State", "Time"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+            <tbody>{hiveQueries.length === 0 ? <tr><td colSpan={5} style={{ ...WS.td, textAlign: "center", color: "#888" }}>No queries executed yet</td></tr> : hiveQueries.map((q, i) => <tr key={i} style={{ background: i % 2 ? "#fafafa" : "#fff" }}><td style={WS.td}>{i + 1}</td><td style={WS.td}>{q.db}</td><td style={{ ...WS.td, fontFamily: "monospace", fontSize: 11 }}>{q.q.slice(0, 80)}</td><td style={{ ...WS.td, color: "#090" }}>{q.state}</td><td style={{ ...WS.td, fontSize: 11 }}>{new Date(q.ts).toLocaleTimeString()}</td></tr>)}</tbody>
+          </table>
+        </>}
+        {subTab === "config" && <>
+          <h3 style={{ fontSize: 15, margin: "0 0 10px" }}>Hive Configuration</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 20px", fontSize: 12, lineHeight: 2, padding: 12, background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
+            <div><b>hive.server2.thrift.port:</b> 10000</div>
+            <div><b>hive.server2.webui.port:</b> 10002</div>
+            <div><b>hive.metastore.warehouse.dir:</b> /user/hive/warehouse</div>
+            <div><b>javax.jdo.option.ConnectionURL:</b> jdbc:derby:metastore_db</div>
+            <div><b>hive.execution.engine:</b> mr</div>
+            <div><b>hive.server2.authentication:</b> NONE</div>
+            <div><b>hive.support.concurrency:</b> false</div>
+            <div><b>hive.compactor.initiator.on:</b> false</div>
+            <div><b>mapreduce.framework.name:</b> yarn</div>
+            <div><b>fs.defaultFS:</b> hdfs://hadoop-VirtualBox:9000</div>
+          </div>
+        </>}
+        {subTab === "databases" && <>
+          <h3 style={{ fontSize: 15, margin: "0 0 10px" }}>Databases & Tables</h3>
+          {Object.entries(hiveDBs).map(([dbName, db]) => (
+            <div key={dbName} style={{ marginBottom: 14, padding: 12, background: "#fff", border: "1px solid #ddd", borderRadius: 4 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "#f5a623", marginBottom: 6 }}>📁 {dbName}{dbName === currentHiveDB && <span style={{ fontSize: 10, marginLeft: 8, background: "#e8f5e9", color: "#2e7d32", padding: "1px 6px", borderRadius: 3 }}>active</span>}</div>
+              {Object.keys(db.tables).length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>(sin tablas)</div> :
+                <table style={WS.tbl}>
+                  <thead><tr>{["Tabla", "Columnas", "Filas", "HDFS Path"].map(h => <th key={h} style={WS.th}>{h}</th>)}</tr></thead>
+                  <tbody>{Object.entries(db.tables).map(([tName, t], i) => (
+                    <tr key={i}><td style={{ ...WS.td, fontWeight: 600 }}>{tName}</td><td style={WS.td}>{t.columns.map(c => `${c.name} ${c.type}`).join(", ")}</td><td style={WS.td}>{t.rows.length}</td><td style={{ ...WS.td, fontSize: 11, fontFamily: "monospace" }}>/user/hive/warehouse/{dbName === "default" ? "" : dbName + ".db/"}{tName}</td></tr>
+                  ))}</tbody>
+                </table>
+              }
+            </div>
+          ))}
+        </>}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ══════════════════════════════════════════════════════════════════
 export default function HadoopVMSimulator() {
@@ -923,6 +1030,19 @@ export default function HadoopVMSimulator() {
   const [sshCwd, setSshCwd] = useState("/home/hadoop");
   const [storageReady, setStorageReady] = useState(false);
   const [activeTab, setActiveTab] = useState("terminal");
+  // ── Hive state ──
+  const [hiveServices, setHiveServices] = useState({ hiveserver2: false });
+  const [beelineMode, setBeelineMode] = useState(false);
+  const [beelineConnected, setBeelineConnected] = useState(false);
+  const [hiveDBs, setHiveDBs] = useState({ default: { tables: {} } });
+  const [currentHiveDB, setCurrentHiveDB] = useState("default");
+  const [hiveQueries, setHiveQueries] = useState([]);
+  // ── Terminal tabs ──
+  const [termTabs, setTermTabs] = useState([{ id: 1, name: "Terminal 1" }]);
+  const [activeTermTab, setActiveTermTab] = useState(1);
+  const [termTabLines, setTermTabLines] = useState({ 1: null }); // null = use main lines
+  const [termTabCwd, setTermTabCwd] = useState({});
+  const nextTermTabId = useRef(2);
   const termRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -965,6 +1085,7 @@ export default function HadoopVMSimulator() {
         if (s.hdfsSnapEnabled) setHdfsSnapEnabled(new Set(s.hdfsSnapEnabled)); if (s.hdfsSnapshots) setHdfsSnapshots(s.hdfsSnapshots);
         if (s.yarnApps) setYarnApps(s.yarnApps); if (s.appCounter) setAppCounter(s.appCounter);
         if (s.fsimageCounter) setFsimageCounter(s.fsimageCounter); if (s.permsMap) setPermsMap(s.permsMap); if (s.lines) setLines(s.lines);
+          if (s.hiveDBs) setHiveDBs(s.hiveDBs); if (s.currentHiveDB) setCurrentHiveDB(s.currentHiveDB); if (s.hiveQueries) setHiveQueries(s.hiveQueries);
         setStorageReady(true); return;
       }
     } catch {}
@@ -976,10 +1097,10 @@ export default function HadoopVMSimulator() {
     if (!storageReady || !localFS) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ localFS, hdfsFS, cwd, history: history.slice(0, 100), services, safeMode, hdfsSnapEnabled: [...hdfsSnapEnabled], hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines: lines.slice(-200) })); } catch {}
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ localFS, hdfsFS, cwd, history: history.slice(0, 100), services, safeMode, hdfsSnapEnabled: [...hdfsSnapEnabled], hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines: lines.slice(-200), hiveDBs, currentHiveDB, hiveQueries: hiveQueries.slice(-50) })); } catch {}
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [localFS, hdfsFS, cwd, history, services, safeMode, hdfsSnapEnabled, hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines, storageReady]);
+  }, [localFS, hdfsFS, cwd, history, services, safeMode, hdfsSnapEnabled, hdfsSnapshots, yarnApps, appCounter, fsimageCounter, permsMap, lines, storageReady, hiveDBs, currentHiveDB, hiveQueries]);
 
   useEffect(() => { if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight; }, [lines]);
 
@@ -1054,7 +1175,7 @@ export default function HadoopVMSimulator() {
     }
     const pipes = trimmed.split("|").map(s => s.trim()); const mainCmd = pipes[0]; const tokens = parseTokens(mainCmd); const base = tokens[0];
 
-    if (base === "help") return [out("╔══════════════════════════════════════════════════════════════════╗\n║            SIMULADOR HADOOP — COMANDOS DISPONIBLES              ║\n╠══════════════════════════════════════════════════════════════════╣\n║ LINUX: ls [-l,-a,-r,-la,-lh], cd, pwd, mkdir [-p], touch,      ║\n║   cp [-r], mv, rm [-r,-f], cat, head, tail, grep, chmod [-R],  ║\n║   wc [-l,-w,-c], ps, top, hostname, uname, free, df, echo      ║\n║                                                                 ║\n║ SCRIPTS: echo 'cmd' >> script.sh · chmod u+x · ./script.sh     ║\n║ SSH: ssh nodo2 · ssh nodo3 (esclavos)                           ║\n║                                                                 ║\n║ SERVICIOS: ./start-dfs.sh  ./stop-dfs.sh                       ║\n║   ./start-yarn.sh  ./stop-yarn.sh  jps [-l]                    ║\n║                                                                 ║\n║ HDFS: hdfs dfs -ls/-mkdir/-put/-get/-cat/-rm/-chmod/-cp         ║\n║   hdfs dfs -createSnapshot/-deleteSnapshot                      ║\n║   hdfs dfsadmin -report/-safemode/-saveNamespace                ║\n║   hdfs fsck / [-files -blocks]                                  ║\n║                                                                 ║\n║ YARN: yarn node -list · yarn application -list/-status/-kill    ║\n║ MAPREDUCE: hadoop jar <jar> grep/wordcount/TestDFSIO            ║\n║                                                                 ║\n║ WEB UIs: Usa las pestañas HDFS(:9870) y YARN(:8088) arriba     ║\n║ PERSISTENCIA: Progreso guardado · 'reset' para reiniciar       ║\n║ Tab: autocompleta · ↑↓: historial                              ║\n╚══════════════════════════════════════════════════════════════════╝", "help")];
+    if (base === "help") return [out("╔══════════════════════════════════════════════════════════════════╗\n║            SIMULADOR HADOOP — COMANDOS DISPONIBLES              ║\n╠══════════════════════════════════════════════════════════════════╣\n║ LINUX: ls [-l,-a,-r,-la,-lh], cd, pwd, mkdir [-p], touch,      ║\n║   cp [-r], mv, rm [-r,-f], cat, head, tail, grep, chmod [-R],  ║\n║   wc [-l,-w,-c], ps, top, hostname, uname, free, df, echo      ║\n║                                                                 ║\n║ SCRIPTS: echo 'cmd' >> script.sh · chmod u+x · ./script.sh     ║\n║ SSH: ssh nodo2 · ssh nodo3 (esclavos)                           ║\n║                                                                 ║\n║ SERVICIOS: ./start-dfs.sh  ./stop-dfs.sh                       ║\n║   ./start-yarn.sh  ./stop-yarn.sh  jps [-l]                    ║\n║                                                                 ║\n║ HDFS: hdfs dfs -ls/-mkdir/-put/-get/-cat/-rm/-chmod/-cp         ║\n║   hdfs dfs -createSnapshot/-deleteSnapshot                      ║\n║   hdfs dfsadmin -report/-safemode/-saveNamespace                ║\n║   hdfs fsck / [-files -blocks]                                  ║\n║                                                                 ║\n║ YARN: yarn node -list · yarn application -list/-status/-kill    ║\n║ MAPREDUCE: hadoop jar <jar> grep/wordcount/TestDFSIO            ║\n║                                                                 ║\n║ WEB UIs: Usa las pestañas HDFS(:9870) y YARN(:8088) arriba     ║\n║                                                                 ║\n║ HIVE: hiveserver2 (inicia servidor) · beeline (cliente)         ║\n║   !connect jdbc:hive2://hadoop-virtualbox:10000                 ║\n║   show databases; · create database <db>; · use <db>;           ║\n║   create table <t> (col tipo); · insert into <t> values (...);  ║\n║   select * from <t>; · describe <t>; · !tables · !exit          ║\n║                                                                 ║\n║ PERSISTENCIA: Progreso guardado · 'reset' para reiniciar       ║\n║ Tab: autocompleta · ↑↓: historial                              ║\n╚══════════════════════════════════════════════════════════════════╝", "help")];
     if (base === "clear") return [{ type: "clear" }];
     if (base === "pwd") return [out(cwd)]; if (base === "whoami") return [out("hadoop")]; if (base === "hostname") return [out("hadoop-VirtualBox")];
     if (base === "uname") return [out(tokens.includes("-a") ? "Linux hadoop-VirtualBox 5.15.0-91-generic #101-Ubuntu SMP x86_64 x86_64 x86_64 GNU/Linux" : "Linux")];
@@ -1064,13 +1185,13 @@ export default function HadoopVMSimulator() {
     if (base === "df") return [out("Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   18G   30G  38% /\n/dev/sda2       100G   25G   70G  27% /datos")];
     if (base === "ifconfig" || base === "ip") return [out("eth0: inet 192.168.56.10  netmask 255.255.255.0")];
 
-    if (base === "reset") { try { localStorage.removeItem(STORAGE_KEY); } catch {} const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setCwd("/home/hadoop"); setServices({ namenode: false, datanode: false, secondarynamenode: false, resourcemanager: false, nodemanager: false, historyserver: false }); setSafeMode(false); setHdfsSnapEnabled(new Set()); setHdfsSnapshots({}); setYarnApps([]); setAppCounter(1); setFsimageCounter(42); setPermsMap({}); setHistory([]); setSshNode(null); setSshCwd("/home/hadoop"); setLines(welcomeLines); return [out("✓ Estado reiniciado.", "success")]; }
+    if (base === "reset") { try { localStorage.removeItem(STORAGE_KEY); } catch {} const init = createInitialState(); setLocalFS(init.localFS); setHdfsFS(init.hdfsFS); setCwd("/home/hadoop"); setServices({ namenode: false, datanode: false, secondarynamenode: false, resourcemanager: false, nodemanager: false, historyserver: false }); setSafeMode(false); setHdfsSnapEnabled(new Set()); setHdfsSnapshots({}); setYarnApps([]); setAppCounter(1); setFsimageCounter(42); setPermsMap({}); setHistory([]); setSshNode(null); setSshCwd("/home/hadoop"); setHiveServices({ hiveserver2: false }); setBeelineMode(false); setBeelineConnected(false); setHiveDBs({ default: { tables: {} } }); setCurrentHiveDB("default"); setHiveQueries([]); setLines(welcomeLines); return [out("✓ Estado reiniciado.", "success")]; }
 
     if (base === "echo") { const arg = tokens.slice(1).join(" ").replace(/['"]/g, ""); if (arg.includes("$(hadoop classpath)")) return [out("/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*")]; if (arg.includes("$HADOOP_HOME")) return [out("/opt/hadoop")]; if (arg.includes("$HOME")) return [out("/home/hadoop")]; if (arg.includes("$JAVA_HOME")) return [out("/usr/lib/jvm/java-11-openjdk-amd64")]; return [out(arg)]; }
     if (base === "wc") { const target = tokens.find((t, i) => i > 0 && !t.startsWith("-")); if (!target) return [out("wc: falta operando", "error")]; const nd = getLocalNode(resolvePath(target, cwd)); if (!nd || nd.type !== "file") return [out(`wc: ${target}: No existe`, "error")]; const c = nd.content || ""; const lc = c.split("\n").length; const wc = c.split(/\s+/).filter(Boolean).length; if (tokens.includes("-l")) return [out(`  ${lc} ${target}`)]; if (tokens.includes("-w")) return [out(`  ${wc} ${target}`)]; if (tokens.includes("-c")) return [out(`  ${c.length} ${target}`)]; return [out(`  ${lc}  ${wc} ${c.length} ${target}`)]; }
     if (base === "top") { const p = []; if (services.namenode) p.push("  1234 hadoop    20   0 1.2g 256m S  2.0  3.2 java (NameNode)"); if (services.datanode) p.push("  1235 hadoop    20   0 1.1g 200m S  1.5  2.5 java (DataNode)"); if (services.resourcemanager) p.push("  1236 hadoop    20   0 1.3g 300m S  3.0  3.7 java (ResourceManager)"); if (services.nodemanager) p.push("  1237 hadoop    20   0 1.0g 180m S  1.0  2.2 java (NodeManager)"); return [out(`top - 10:00:00 up 2 days, load average: 0.15, 0.10, 0.05\nTasks: ${120 + p.length} total\nMiB Mem: 8192.0 total, 2150.0 free, 3280.0 used\n\n  PID USER      PR  NI    VIRT    RES S  %CPU  %MEM COMMAND\n${p.join("\n")}`)]; }
     if (base === "ps") { let pl = "  PID TTY          TIME CMD\n 1000 pts/0    00:00:00 bash"; if (services.namenode) pl += "\n 1234 ?        00:00:45 java -Dproc_namenode"; if (services.datanode) pl += "\n 1235 ?        00:00:32 java -Dproc_datanode"; if (services.secondarynamenode) pl += "\n 1238 ?        00:00:12 java -Dproc_secondarynamenode"; if (services.resourcemanager) pl += "\n 1236 ?        00:00:58 java -Dproc_resourcemanager"; if (services.nodemanager) pl += "\n 1237 ?        00:00:22 java -Dproc_nodemanager"; if (services.historyserver) pl += "\n 1239 ?        00:00:08 java -Dproc_historyserver"; return [out(pl)]; }
-    if (base === "jps") { const p = []; if (services.namenode) p.push("1234 NameNode"); if (services.datanode) p.push("1235 DataNode"); if (services.secondarynamenode) p.push("1238 SecondaryNameNode"); if (services.resourcemanager) p.push("1236 ResourceManager"); if (services.nodemanager) p.push("1237 NodeManager"); if (services.historyserver) p.push("1239 JobHistoryServer"); p.push(`${1240 + p.length} Jps`); if (tokens.includes("-l")) { const fqn = { NameNode: "org.apache.hadoop.hdfs.server.namenode.NameNode", DataNode: "org.apache.hadoop.hdfs.server.datanode.DataNode", SecondaryNameNode: "org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode", ResourceManager: "org.apache.hadoop.yarn.server.resourcemanager.ResourceManager", NodeManager: "org.apache.hadoop.yarn.server.nodemanager.NodeManager", JobHistoryServer: "org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer", Jps: "sun.tools.jps.Jps" }; return [out(p.map(x => { const [pid, nm] = x.split(" "); return `${pid} ${fqn[nm] || nm}`; }).join("\n"))]; } return [out(p.join("\n"))]; }
+    if (base === "jps") { const p = []; if (services.namenode) p.push("1234 NameNode"); if (services.datanode) p.push("1235 DataNode"); if (services.secondarynamenode) p.push("1238 SecondaryNameNode"); if (services.resourcemanager) p.push("1236 ResourceManager"); if (services.nodemanager) p.push("1237 NodeManager"); if (services.historyserver) p.push("1239 JobHistoryServer"); if (hiveServices.hiveserver2) p.push("1250 HiveServer2"); p.push(`${1240 + p.length} Jps`); if (tokens.includes("-l")) { const fqn = { NameNode: "org.apache.hadoop.hdfs.server.namenode.NameNode", DataNode: "org.apache.hadoop.hdfs.server.datanode.DataNode", SecondaryNameNode: "org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode", ResourceManager: "org.apache.hadoop.yarn.server.resourcemanager.ResourceManager", NodeManager: "org.apache.hadoop.yarn.server.nodemanager.NodeManager", JobHistoryServer: "org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer", HiveServer2: "org.apache.hive.service.server.HiveServer2", Jps: "sun.tools.jps.Jps" }; return [out(p.map(x => { const [pid, nm] = x.split(" "); return `${pid} ${fqn[nm] || nm}`; }).join("\n"))]; } return [out(p.join("\n"))]; }
     if (base === "cd") { const t = tokens[1] || "~"; const r = resolvePath(t, cwd); const nd = getLocalNode(r); if (!nd && !localFS[r]) return [out(`bash: cd: ${t}: No existe`, "error")]; if (nd?.type === "file") return [out(`bash: cd: ${t}: No es un directorio`, "error")]; setCwd(r); return []; }
 
     // ── ls ──
@@ -1193,18 +1314,187 @@ export default function HadoopVMSimulator() {
       setLocalFS(nf); return [out(`gunzip: ${target} → ${outName}`, "success")];
     }
     if (base === "exit") return [out("(Nodo maestro. Usa 'reset' para reiniciar.)", "warn")];
+    if (base === "hiveserver2") {
+      if (!services.namenode) return [out("Error: HDFS no está activo.", "error")];
+      if (!services.resourcemanager) return [out("Error: YARN no está activo.", "error")];
+      setHiveServices(s => ({ ...s, hiveserver2: true }));
+      return [out("2026-03-03 10:00:00 INFO  hive.metastore: Starting Hive Metastore Server\n2026-03-03 10:00:01 INFO  service.CompositeService: Starting HiveServer2\n2026-03-03 10:00:02 INFO  thrift.ThriftCLIService: Starting ThriftBinaryCLIService on port 10000\n2026-03-03 10:00:03 INFO  http.HttpServer: Started HiveServer2 Web UI on port 10002\n\n✓ HiveServer2 activo en puerto 10000\n  Web UI → pestaña Hive(:10002)", "success")];
+    }
+    if (base === "beeline") {
+      if (!hiveServices.hiveserver2) return [out("Error: HiveServer2 no está activo.\nInicia primero:\n  cd /opt/hadoop/hive/bbdd\n  hiveserver2", "error")];
+      setBeelineMode(true);
+      setBeelineConnected(false);
+      return [out("Beeline version 4.0.0 by Apache Hive\nbeeline>", "system")];
+    }
     if (["nano", "vim", "vi", "gedit"].includes(base)) return [out(`(${base} no disponible. Usa echo >> archivo y cat.)`, "warn")];
     if (base === "bash" || base === "sh") { const sp = tokens[1]; if (!sp) return [out(`${base}: falta archivo`, "error")]; const nd = getLocalNode(resolvePath(sp, cwd)); if (!nd || nd.type !== "file") return [out(`${base}: ${sp}: No existe`, "error")]; const sLines = (nd.content || "").split("\n").filter(l => l.trim() && !l.trim().startsWith("#")); const results = []; for (const line of sLines) results.push(...processCommand(line.trim())); return results; }
     if (base.startsWith("./")) { const sn = base.substring(2); const r = resolvePath(sn, cwd); const nd = getLocalNode(r); if (!nd || nd.type !== "file") return [out(`bash: ${base}: No existe`, "error")]; const pm = permsMap[r] || "rw-r--r--"; if (!pm.includes("x")) return [out(`bash: ${base}: Permiso denegado\nTip: chmod u+x ${sn}`, "error")]; const sLines = (nd.content || "").split("\n").filter(l => l.trim() && !l.trim().startsWith("#")); const results = []; for (const line of sLines) results.push(...processCommand(line.trim())); return results.length === 0 ? [out(`(script ${sn} ejecutado)`, "success")] : results; }
     return [out(`bash: ${base}: comando no encontrado`, "error")];
-  }, [cwd, services, localFS, hdfsFS, safeMode, hdfsSnapEnabled, hdfsSnapshots, appCounter, fsimageCounter, permsMap, out, resolvePath, getLocalNode, ensureHdfsDir, ensureLocalDir, formatLs, yarnApps, getDirItems]);
+  }, [cwd, services, hiveServices, localFS, hdfsFS, safeMode, hdfsSnapEnabled, hdfsSnapshots, appCounter, fsimageCounter, permsMap, out, resolvePath, getLocalNode, ensureHdfsDir, ensureLocalDir, formatLs, yarnApps, getDirItems]);
+
+  // ── Beeline/HiveQL processor ──
+  const processBeelineCommand = useCallback((cmd) => {
+    const trimmed = cmd.trim().replace(/;\s*$/, "");
+    const lower = trimmed.toLowerCase();
+    // Beeline meta-commands
+    if (trimmed === "!exit" || trimmed === "!quit") { setBeelineMode(false); setBeelineConnected(false); return [out("Closing: 0: jdbc:hive2://hadoop-virtualbox:10000\n(Beeline cerrado)", "system")]; }
+    if (trimmed.startsWith("!connect")) {
+      if (trimmed.includes("jdbc:hive2://hadoop-virtualbox:10000") || trimmed.includes("jdbc:hive2://hadoop-VirtualBox:10000")) {
+        setBeelineConnected(true);
+        return [out("Connecting to jdbc:hive2://hadoop-virtualbox:10000\nEnter username for jdbc:hive2://hadoop-virtualbox:10000:\nEnter password for jdbc:hive2://hadoop-virtualbox:10000:\nConnected to: Apache Hive (version 4.0.0)\nDriver: Hive JDBC (version 4.0.0)\nTransaction isolation: TRANSACTION_REPEATABLE_READ", "success")];
+      }
+      return [out(`Error: Could not open connection. Check URL.`, "error")];
+    }
+    if (!beelineConnected) return [out("Error: Not connected. Use:\n!connect jdbc:hive2://hadoop-virtualbox:10000", "error")];
+    if (trimmed === "!tables") {
+      const db = hiveDBs[currentHiveDB]; if (!db) return [out("(ninguna tabla)")];
+      const tables = Object.keys(db.tables);
+      if (tables.length === 0) return [out("+-----------+\n| tab_name  |\n+-----------+\n+-----------+\n0 rows selected")];
+      const maxW = Math.max(8, ...tables.map(t => t.length));
+      const sep = "+" + "-".repeat(maxW + 2) + "+";
+      return [out(`${sep}\n| ${"tab_name".padEnd(maxW)} |\n${sep}\n${tables.map(t => `| ${t.padEnd(maxW)} |`).join("\n")}\n${sep}\n${tables.length} rows selected`)];
+    }
+    if (trimmed === "help") return [out("Beeline commands:\n  !connect jdbc:hive2://hadoop-virtualbox:10000\n  !tables                    — listar tablas\n  !exit                      — salir de Beeline\n  show databases;            — bases de datos\n  show tables;               — tablas en BD actual\n  use <db>;                  — cambiar BD\n  create database <db>;      — crear BD\n  create table <t> (col tipo, ...);  — crear tabla\n  insert into <t> values (...);      — insertar datos\n  select ... from <t>;               — consultar\n  describe <t>;              — ver esquema\n  drop table <t>;            — eliminar tabla\n  drop database <db> [cascade];", "help")];
+    // HiveQL
+    if (lower === "show databases") {
+      const dbs = Object.keys(hiveDBs);
+      const maxW = Math.max(13, ...dbs.map(d => d.length));
+      const sep = "+" + "-".repeat(maxW + 2) + "+";
+      return [out(`INFO  : Compiling command: show databases\nINFO  : Completed compiling command\nINFO  : Executing command: show databases\n${sep}\n| ${"database_name".padEnd(maxW)} |\n${sep}\n${dbs.map(d => `| ${d.padEnd(maxW)} |`).join("\n")}\n${sep}\n${dbs.length} rows selected`)];
+    }
+    if (lower.startsWith("select current_database()")) return [out(`+-------------------+\n| current_database  |\n+-------------------+\n| ${currentHiveDB.padEnd(17)} |\n+-------------------+`)];
+    if (lower.startsWith("create database ")) {
+      const dbName = trimmed.split(/\s+/)[2];
+      if (hiveDBs[dbName]) return [out(`FAILED: Database ${dbName} already exists`, "error")];
+      setHiveDBs(prev => ({ ...prev, [dbName]: { tables: {} } }));
+      // Also create in HDFS
+      const whPath = `/user/hive/warehouse/${dbName}.db`;
+      setHdfsFS(prev => { let nf = ensureHdfsDir(whPath, { ...prev }); return nf; });
+      return [out(`INFO  : Compiling command: create database ${dbName}\nINFO  : Executing command\nNo rows affected\n\n✓ Base de datos '${dbName}' creada. En HDFS: /user/hive/warehouse/${dbName}.db`, "success")];
+    }
+    if (lower.startsWith("drop database ")) {
+      const parts = trimmed.split(/\s+/); const dbName = parts[2]; const cascade = lower.includes("cascade");
+      if (!hiveDBs[dbName]) return [out(`FAILED: Database ${dbName} does not exist`, "error")];
+      if (dbName === "default") return [out("FAILED: Cannot drop default database", "error")];
+      if (!cascade && Object.keys(hiveDBs[dbName].tables).length > 0) return [out(`FAILED: Database ${dbName} is not empty. Use CASCADE.`, "error")];
+      setHiveDBs(prev => { const n = { ...prev }; delete n[dbName]; return n; });
+      if (currentHiveDB === dbName) setCurrentHiveDB("default");
+      return [out(`No rows affected\n✓ Database '${dbName}' dropped`, "success")];
+    }
+    if (lower.startsWith("use ")) {
+      const dbName = trimmed.split(/\s+/)[1];
+      if (!hiveDBs[dbName]) return [out(`FAILED: Database ${dbName} does not exist`, "error")];
+      setCurrentHiveDB(dbName);
+      return [out(`No rows affected`)];
+    }
+    if (lower === "show tables") {
+      const db = hiveDBs[currentHiveDB]; if (!db) return [out("(ninguna tabla)")];
+      const tables = Object.keys(db.tables);
+      if (tables.length === 0) return [out("+-----------+\n| tab_name  |\n+-----------+\n+-----------+\n0 rows selected")];
+      const maxW = Math.max(8, ...tables.map(t => t.length));
+      const sep = "+" + "-".repeat(maxW + 2) + "+";
+      return [out(`${sep}\n| ${"tab_name".padEnd(maxW)} |\n${sep}\n${tables.map(t => `| ${t.padEnd(maxW)} |`).join("\n")}\n${sep}\n${tables.length} rows selected`)];
+    }
+    if (lower.startsWith("create table ")) {
+      const m = trimmed.match(/create\s+table\s+(?:if\s+not\s+exists\s+)?(\w+)\s*\((.+)\)/i);
+      if (!m) return [out("Error: Syntax error in CREATE TABLE", "error")];
+      const tName = m[1]; const colDefs = m[2].split(",").map(c => { const p = c.trim().split(/\s+/); return { name: p[0], type: p[1] || "STRING" }; });
+      setHiveDBs(prev => {
+        const db = { ...prev[currentHiveDB] }; db.tables = { ...db.tables, [tName]: { columns: colDefs, rows: [], partitions: [] } };
+        return { ...prev, [currentHiveDB]: db };
+      });
+      const whPath = `/user/hive/warehouse/${currentHiveDB === "default" ? "" : currentHiveDB + ".db/"}${tName}`;
+      setHdfsFS(prev => ensureHdfsDir(whPath, { ...prev }));
+      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+      return [out(`INFO  : Compiling command: create table ${tName}\nINFO  : Starting task [Stage-0:DDL] in serial mode\nINFO  : Completed executing command\nNo rows affected\n\n✓ Tabla '${tName}' creada en ${currentHiveDB}`, "success")];
+    }
+    if (lower.startsWith("drop table ")) {
+      const tName = trimmed.split(/\s+/)[2];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables }; delete d.tables[tName]; return { ...prev, [currentHiveDB]: d }; });
+      return [out(`No rows affected\n✓ Tabla '${tName}' eliminada`, "success")];
+    }
+    if (lower.startsWith("truncate table ")) {
+      const tName = trimmed.split(/\s+/)[2];
+      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [] } }; return { ...prev, [currentHiveDB]: d }; });
+      return [out(`No rows affected`)];
+    }
+    if (lower.startsWith("describe ") || lower.startsWith("desc ")) {
+      const tName = trimmed.split(/\s+/)[1];
+      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const cols = db.tables[tName].columns;
+      const maxN = Math.max(8, ...cols.map(c => c.name.length));
+      const maxT = Math.max(4, ...cols.map(c => c.type.length));
+      const sep = "+" + "-".repeat(maxN + 2) + "+" + "-".repeat(maxT + 2) + "+" + "-".repeat(10) + "+";
+      return [out(`${sep}\n| ${"col_name".padEnd(maxN)} | ${"data_type".padEnd(maxT)} | ${"comment".padEnd(8)} |\n${sep}\n${cols.map(c => `| ${c.name.padEnd(maxN)} | ${c.type.toUpperCase().padEnd(maxT)} | ${"".padEnd(8)} |`).join("\n")}\n${sep}\n${cols.length} rows selected`)];
+    }
+    if (lower.startsWith("insert into ")) {
+      const m = trimmed.match(/insert\s+into\s+(?:table\s+)?(\w+)\s+values\s*(.+)/i);
+      if (!m) return [out("Error: Syntax error in INSERT", "error")];
+      const tName = m[1]; const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const valuesStr = m[2]; const rowMatches = [...valuesStr.matchAll(/\(([^)]+)\)/g)];
+      const newRows = rowMatches.map(rm => rm[1].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")));
+      const aid = appCounter; setAppCounter(c => c + 1);
+      setYarnApps(prev => [...prev, { id: aid, name: `insert_${tName}`, state: "FINISHED" }]);
+      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [...d.tables[tName].rows, ...newRows] } }; return { ...prev, [currentHiveDB]: d }; });
+      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+      return [out(`INFO  : Compiling command: insert into ${tName}\nINFO  : Starting job: job_1700000000000_${String(aid).padStart(4, "0")}\nINFO  : map 100% reduce 100%\nINFO  : Job completed successfully\nNo rows affected (MapReduce)\n\n✓ ${newRows.length} fila(s) insertada(s) en '${tName}'`, "success")];
+    }
+    if (lower.startsWith("select ")) {
+      const m = trimmed.match(/select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?(?:\s+(?:order|group)\s+by\s+(.+?))?(?:\s+limit\s+(\d+))?$/i);
+      if (!m) return [out("Error: Syntax error in SELECT", "error")];
+      const selCols = m[1]; const tName = m[2]; const whereClause = m[3]; const limitN = m[5] ? parseInt(m[5]) : null;
+      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const tbl = db.tables[tName]; const colNames = tbl.columns.map(c => c.name);
+      let selectedCols = selCols.trim() === "*" ? colNames : selCols.split(",").map(c => c.trim());
+      let rows = [...tbl.rows];
+      if (whereClause) { try { const wm = whereClause.match(/(\w+)\s*(=|!=|>|<|>=|<=)\s*['"]*([^'"]*)['"]*$/); if (wm) { const ci = colNames.indexOf(wm[1]); const op = wm[2]; const val = wm[3]; if (ci >= 0) rows = rows.filter(r => { const rv = r[ci]; if (op === "=") return rv == val; if (op === "!=") return rv != val; if (op === ">") return parseFloat(rv) > parseFloat(val); if (op === "<") return parseFloat(rv) < parseFloat(val); return true; }); } } catch {} }
+      if (limitN) rows = rows.slice(0, limitN);
+      const colIdxs = selectedCols.map(c => { if (c.startsWith("count(")) return -2; if (c.startsWith("sum(")) return -3; return colNames.indexOf(c); });
+      // Handle aggregates
+      if (colIdxs.some(i => i === -2 || i === -3)) {
+        const aggResults = colIdxs.map((ci, i) => { if (ci === -2) return String(rows.length); if (ci === -3) { const inner = selectedCols[i].match(/sum\((\w+)\)/i); const si = inner ? colNames.indexOf(inner[1]) : -1; return si >= 0 ? String(rows.reduce((s, r) => s + (parseFloat(r[si]) || 0), 0)) : "0"; } return rows[0]?.[ci] || ""; });
+        const maxWs = selectedCols.map((c, i) => Math.max(c.length, aggResults[i].length));
+        const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
+        return [out(`${sep}\n| ${selectedCols.map((c, i) => c.padEnd(maxWs[i])).join(" | ")} |\n${sep}\n| ${aggResults.map((v, i) => v.padEnd(maxWs[i])).join(" | ")} |\n${sep}\n1 row selected`)];
+      }
+      const maxWs = selectedCols.map((c, i) => Math.max(c.length, ...rows.map(r => String(r[colIdxs[i]] || "NULL").length)));
+      const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
+      const hdr = "| " + selectedCols.map((c, i) => c.padEnd(maxWs[i])).join(" | ") + " |";
+      const bodyRows = rows.map(r => "| " + colIdxs.map((ci, i) => String(ci >= 0 ? (r[ci] ?? "NULL") : "NULL").padEnd(maxWs[i])).join(" | ") + " |");
+      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+      return [out(`${sep}\n${hdr}\n${sep}\n${bodyRows.join("\n")}\n${sep}\n${rows.length} rows selected`)];
+    }
+    if (lower.startsWith("load data")) {
+      const m = trimmed.match(/load\s+data\s+(?:local\s+)?inpath\s+['"](.*?)['"]\s+(?:overwrite\s+)?into\s+table\s+(\w+)/i);
+      if (!m) return [out("Error: Syntax error in LOAD DATA", "error")];
+      const filePath = m[1]; const tName = m[2];
+      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const nd = getLocalNode(resolvePath(filePath, cwd));
+      if (!nd || nd.type !== "file") return [out(`FAILED: File not found: ${filePath}`, "error")];
+      const fileRows = (nd.content || "").split("\n").filter(l => l.trim()).map(l => l.split(/[,\t]/));
+      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [...d.tables[tName].rows, ...fileRows] } }; return { ...prev, [currentHiveDB]: d }; });
+      return [out(`Loading data to table ${tName}\n✓ ${fileRows.length} filas cargadas`, "success")];
+    }
+    return [out(`Error: Comando no reconocido. Escribe 'help' para ver comandos.\n\nRecuerda:\n  - Comandos HiveQL terminan en ;\n  - Comandos beeline empiezan con !`, "error")];
+  }, [beelineConnected, hiveDBs, currentHiveDB, out, appCounter, cwd, getLocalNode, resolvePath, ensureHdfsDir]);
 
   // ── Submit ──
   const handleSubmit = () => {
     const cmd = input.trim(); if (!cmd) return;
+    setHistory(prev => [cmd, ...prev]); setHistIdx(-1); setInput("");
+
+    if (beelineMode) {
+      const prompt = { type: "prompt", text: `${beelineConnected ? "0: jdbc:hive2://hadoop-virtualbox:10000" : "beeline"}> ${cmd}` };
+      const results = processBeelineCommand(cmd);
+      if (results.some(r => r.type === "clear")) setLines([]); else setLines(prev => [...prev, prompt, ...results]);
+      return;
+    }
+
     const host = sshNode || "hadoop-VirtualBox"; const cwdD = (sshNode ? sshCwd : cwd); const d = cwdD === "/home/hadoop" ? "~" : cwdD;
     const prompt = { type: "prompt", text: `hadoop@${host}:${d}$ ${cmd}` };
-    setHistory(prev => [cmd, ...prev]); setHistIdx(-1); setInput("");
     const results = sshNode ? processSlaveCommand(cmd) : processCommand(cmd);
     if (results.some(r => r.type === "clear")) setLines([]); else setLines(prev => [...prev, prompt, ...results]);
   };
@@ -1212,7 +1502,7 @@ export default function HadoopVMSimulator() {
   // ── Tab autocomplete ──
   const handleTab = useCallback(() => {
     const toks = input.split(" "); const last = toks[toks.length - 1] || "";
-    if (toks.length === 1) { const cmds = sshNode ? ["exit", "logout", "jps", "hostname", "whoami", "pwd", "cd", "ls", "cat", "ps", "top", "free", "df", "uname", "help", "clear"] : ["hdfs", "hadoop", "yarn", "mapred", "jps", "ls", "cd", "pwd", "mkdir", "cat", "cp", "mv", "rm", "chmod", "touch", "ps", "top", "hostname", "uname", "free", "df", "lscpu", "echo", "clear", "help", "whoami", "head", "tail", "grep", "javac", "jar", "ssh", "scp", "md5sum", "wc", "bash", "sh", "reset", "exit", "ifconfig"]; const matches = cmds.filter(c => c.startsWith(last)); if (matches.length === 1) { toks[toks.length - 1] = matches[0] + " "; setInput(toks.join(" ")); } else if (matches.length > 1) { let pf = last; for (let i = last.length; ; i++) { const ch = matches.map(m => m[i]).filter(Boolean); if (!ch.length || new Set(ch).size > 1) break; pf += ch[0]; } toks[toks.length - 1] = pf; setInput(toks.join(" ")); } return; }
+    if (toks.length === 1) { const cmds = sshNode ? ["exit", "logout", "jps", "hostname", "whoami", "pwd", "cd", "ls", "cat", "ps", "top", "free", "df", "uname", "help", "clear"] : ["hdfs", "hadoop", "yarn", "mapred", "jps", "ls", "cd", "pwd", "mkdir", "cat", "cp", "mv", "rm", "chmod", "touch", "ps", "top", "hostname", "uname", "free", "df", "lscpu", "echo", "clear", "help", "whoami", "head", "tail", "grep", "javac", "jar", "ssh", "scp", "md5sum", "wc", "bash", "sh", "reset", "exit", "ifconfig", "hiveserver2", "beeline"]; const matches = cmds.filter(c => c.startsWith(last)); if (matches.length === 1) { toks[toks.length - 1] = matches[0] + " "; setInput(toks.join(" ")); } else if (matches.length > 1) { let pf = last; for (let i = last.length; ; i++) { const ch = matches.map(m => m[i]).filter(Boolean); if (!ch.length || new Set(ch).size > 1) break; pf += ch[0]; } toks[toks.length - 1] = pf; setInput(toks.join(" ")); } return; }
     if (sshNode) return; let dir, prefix; if (last.includes("/")) { const li = last.lastIndexOf("/"); dir = last.substring(0, li) || "/"; prefix = last.substring(li + 1); } else { dir = "."; prefix = last; } const rd = resolvePath(dir, cwd); const dn = localFS?.[rd]; if (!dn) return; const items = getDirItems(dn); const matches = items.filter(i => i.startsWith(prefix)); if (matches.length === 0) return; let comp; if (matches.length === 1) { comp = matches[0]; const cp = rd === "/" ? `/${comp}` : `${rd}/${comp}`; if (localFS[cp]) comp += "/"; } else { let common = prefix; for (let i = prefix.length; ; i++) { const ch = matches.map(m => m[i]).filter(Boolean); if (!ch.length || new Set(ch).size > 1) break; common += ch[0]; } comp = common; } toks[toks.length - 1] = last.includes("/") ? last.substring(0, last.lastIndexOf("/") + 1) + comp : comp; setInput(toks.join(" "));
   }, [input, cwd, localFS, resolvePath, getDirItems, sshNode]);
 
@@ -1270,27 +1560,42 @@ export default function HadoopVMSimulator() {
         {[["resourcemanager", "RM"], ["nodemanager", "NM"], ["historyserver", "HS"]].map(([k, l]) => <span key={k} style={{ display: "flex", alignItems: "center" }}>{svcDot(services[k])}<span style={{ color: services[k] ? "#8f8" : "#666" }}>{l}</span></span>)}
         <span style={{ color: "#333" }}>│</span>
         <span style={{ color: safeMode ? "#fbbf24" : "#555", fontSize: 10 }}>{safeMode ? "⚠ SAFE" : "Safe: OFF"}</span>
+        {hiveServices.hiveserver2 && <><span style={{ color: "#333" }}>│</span><span style={{ display: "flex", alignItems: "center" }}>{svcDot(true)}<span style={{ color: "#f5a623" }}>Hive</span></span></>}
+        {beelineMode && <span style={{ fontSize: 10, background: "#3a2a10", padding: "1px 6px", borderRadius: 3, color: "#f5a623", marginLeft: 4 }}>Beeline{beelineConnected ? " ✓" : ""}</span>}
         {sshNode && <><span style={{ color: "#333" }}>│</span><span style={{ color: "#8ec07c", fontSize: 10 }}>SSH→{sshNode}</span></>}
       </div>
 
       {/* ══ TABS ══ */}
-      <div style={{ background: "#0f0f0f", borderBottom: "1px solid #1a1a1a", padding: "0 4px", display: "flex", fontSize: 11, flexShrink: 0 }}>
+      <div style={{ background: "#0f0f0f", borderBottom: "1px solid #1a1a1a", padding: "0 4px", display: "flex", fontSize: 11, flexShrink: 0, alignItems: "center" }}>
         {[
           ["terminal", "💻 Terminal", "#e2854b"],
           ["hdfs", "🐘 HDFS :9870", "#e47a2c"],
           ["yarn", "🧶 YARN :8088", "#0b7285"],
           ["history", "📋 History :19888", "#c85000"],
+          ["hive", "🐝 Hive :10002", "#f5a623"],
           ["guide", "📖 Guía", "#e2854b"],
         ].map(([id, label, accent]) => {
-          const isWeb = id === "hdfs" || id === "yarn" || id === "history";
+          const isWeb = id === "hdfs" || id === "yarn" || id === "history" || id === "hive";
           return <button key={id} onClick={() => setActiveTab(id)} style={{ padding: "7px 12px", background: activeTab === id ? (isWeb ? "#f8f8f8" : "#1a1a1a") : "transparent", color: activeTab === id ? (isWeb ? "#333" : "#e0e0e0") : "#666", border: "none", borderBottom: activeTab === id ? `2px solid ${accent}` : "2px solid transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>{label}</button>;
         })}
+        {/* Terminal sub-tabs (only when terminal is active) */}
+        {activeTab === "terminal" && <>
+          <span style={{ color: "#333", margin: "0 4px" }}>│</span>
+          {termTabs.map(tab => (
+            <div key={tab.id} style={{ display: "flex", alignItems: "center", background: activeTermTab === tab.id ? "#1a1a1a" : "transparent", borderBottom: activeTermTab === tab.id ? "2px solid #8ec07c" : "2px solid transparent", borderRadius: "3px 3px 0 0" }}>
+              <button onClick={() => setActiveTermTab(tab.id)} style={{ padding: "5px 8px", color: activeTermTab === tab.id ? "#8ec07c" : "#555", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 10 }}>{tab.name}</button>
+              {termTabs.length > 1 && <button onClick={() => { setTermTabs(prev => prev.filter(t => t.id !== tab.id)); if (activeTermTab === tab.id) setActiveTermTab(termTabs.find(t => t.id !== tab.id)?.id || 1); setTermTabLines(prev => { const n = { ...prev }; delete n[tab.id]; return n; }); }} style={{ padding: "2px 4px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 9, lineHeight: 1 }}>✕</button>}
+            </div>
+          ))}
+          <button onClick={() => { const id = nextTermTabId.current++; setTermTabs(prev => [...prev, { id, name: `Terminal ${id}` }]); setActiveTermTab(id); setTermTabLines(prev => ({ ...prev, [id]: [] })); }} style={{ padding: "3px 8px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 14, lineHeight: 1 }} title="Nueva pestaña de terminal">+</button>
+        </>}
       </div>
 
       {/* ══ CONTENT ══ */}
       {activeTab === "hdfs" && <HdfsWebUI services={services} hdfsFS={hdfsFS} safeMode={safeMode} hdfsSnapEnabled={hdfsSnapEnabled} fsimageCounter={fsimageCounter} />}
       {activeTab === "yarn" && <YarnWebUI services={services} yarnApps={yarnApps} />}
       {activeTab === "history" && <JobHistoryUI services={services} yarnApps={yarnApps} />}
+      {activeTab === "hive" && <HiveWebUI hiveServices={hiveServices} hiveDBs={hiveDBs} currentHiveDB={currentHiveDB} hiveQueries={hiveQueries} />}
 
       {activeTab === "guide" && (
         <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", fontSize: 12, lineHeight: 1.7, color: "#bbb" }}>
@@ -1304,7 +1609,9 @@ export default function HadoopVMSimulator() {
               { title: "5. Snapshot HDFS", cmds: ["hdfs dfsadmin -allowSnapshot /log-nodemanager", "hdfs dfs -createSnapshot /log-nodemanager snap_antes", "hdfs dfs -ls /log-nodemanager/.snapshot"] },
               { title: "6. Checkpoint", cmds: ["hdfs dfsadmin -safemode enter", "hdfs dfsadmin -saveNamespace", "hdfs dfsadmin -safemode leave", "ls -lh /datos/namenode/current"] },
               { title: "7. Benchmark", cmds: ["hadoop jar hadoop-mapreduce-client-jobclient-3.4.1-tests.jar TestDFSIO -write -nrFiles 10 -fileSize 100"] },
-              { title: "8. Web UIs", cmds: ["(Pestaña HDFS :9870 para ver el NameNode)", "(Pestaña YARN :8088 para ver ResourceManager)"] },
+              { title: "8. Hive — Iniciar y Beeline", cmds: ["cd /opt/hadoop/hive/bbdd", "hiveserver2", "(En otra pestaña terminal →)", "beeline", "!connect jdbc:hive2://hadoop-virtualbox:10000", "show databases;", "create database ejemplo;", "use ejemplo;"] },
+              { title: "9. Hive — Crear tabla e insertar", cmds: ["create table if not exists t1 (nombre string);", "insert into t1 values ('mi nombre');", "select * from t1;", "!tables", "describe t1;", "!exit"] },
+              { title: "10. Web UIs", cmds: ["(Pestaña HDFS :9870 para ver NameNode)", "(Pestaña YARN :8088 para ResourceManager)", "(Pestaña Hive :10002 para HiveServer2)"] },
             ].map((s, i) => (
               <div key={i} style={{ background: "#151515", border: "1px solid #222", borderRadius: 6, padding: "8px 12px" }}>
                 <div style={{ color: "#e2854b", fontWeight: 600, marginBottom: 4 }}>{s.title}</div>
@@ -1325,10 +1632,15 @@ export default function HadoopVMSimulator() {
             return <pre key={i} style={{ margin: 0, padding: line.type === "prompt" ? "6px 0 0" : "0 0 1px", fontFamily: "inherit", fontSize: 12.5, lineHeight: 1.5, color, whiteSpace: "pre-wrap", wordBreak: "break-all", textAlign: "left" }}>{line.text}</pre>;
           })}
           <div style={{ display: "flex", alignItems: "center", marginTop: 4 }}>
-            <span style={{ color: sshNode ? "#fabd2f" : "#b8bb26", fontSize: 12.5, flexShrink: 0, fontWeight: 600 }}>hadoop@{host}</span>
-            <span style={{ color: "#666", margin: "0 2px", fontSize: 12.5 }}>:</span>
-            <span style={{ color: "#83a598", fontSize: 12.5, flexShrink: 0 }}>{cwdD}</span>
-            <span style={{ color: "#e0e0e0", margin: "0 4px 0 2px", fontSize: 12.5 }}>$</span>
+            {beelineMode ? <>
+              <span style={{ color: "#f5a623", fontSize: 12.5, flexShrink: 0, fontWeight: 600 }}>{beelineConnected ? "0: jdbc:hive2://hadoop-virtualbox:10000" : "beeline"}</span>
+              <span style={{ color: "#f5a623", margin: "0 4px 0 0", fontSize: 12.5 }}>&gt;</span>
+            </> : <>
+              <span style={{ color: sshNode ? "#fabd2f" : "#b8bb26", fontSize: 12.5, flexShrink: 0, fontWeight: 600 }}>hadoop@{host}</span>
+              <span style={{ color: "#666", margin: "0 2px", fontSize: 12.5 }}>:</span>
+              <span style={{ color: "#83a598", fontSize: 12.5, flexShrink: 0 }}>{cwdD}</span>
+              <span style={{ color: "#e0e0e0", margin: "0 4px 0 2px", fontSize: 12.5 }}>$</span>
+            </>}
             <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} autoFocus spellCheck={false} style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "inherit", fontSize: 12.5, caretColor: "#e2854b", lineHeight: 1.5, padding: 0, margin: 0 }} />
             <input ref={fileInputRef} type="file" onChange={handleFileUpload} style={{ display: "none" }} />
             <button onClick={() => fileInputRef.current?.click()} title={`Cargar archivo en ${cwdD}`} style={{ flexShrink: 0, marginLeft: 6, background: "transparent", border: "1px solid #444", borderRadius: 3, color: "#888", cursor: "pointer", fontSize: 11, padding: "1px 6px", lineHeight: 1.4 }}>↑ upload</button>
