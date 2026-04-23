@@ -1011,11 +1011,6 @@ export default function HadoopVMSimulator() {
     { type: "system", text: "Simulador de entorno Hadoop/HDFS/YARN/MapReduce — Big Data 2026-I" },
     { type: "system", text: 'Escribe "help" para ver los comandos disponibles.\n' },
   ];
-  const [lines, setLines] = useState(welcomeLines);
-  const [input, setInput] = useState("");
-  const [cwd, setCwd] = useState("/home/hadoop");
-  const [history, setHistory] = useState([]);
-  const [histIdx, setHistIdx] = useState(-1);
   const [services, setServices] = useState({ namenode: false, datanode: false, secondarynamenode: false, resourcemanager: false, nodemanager: false, historyserver: false });
   const [localFS, setLocalFS] = useState(null);
   const [hdfsFS, setHdfsFS] = useState(null);
@@ -1026,27 +1021,56 @@ export default function HadoopVMSimulator() {
   const [appCounter, setAppCounter] = useState(1);
   const [fsimageCounter, setFsimageCounter] = useState(42);
   const [permsMap, setPermsMap] = useState({});
-  const [sshNode, setSshNode] = useState(null);
-  const [sshCwd, setSshCwd] = useState("/home/hadoop");
   const [storageReady, setStorageReady] = useState(false);
   const [activeTab, setActiveTab] = useState("terminal");
   // ── Hive state ──
   const [hiveServices, setHiveServices] = useState({ hiveserver2: false });
-  const [beelineMode, setBeelineMode] = useState(false);
-  const [beelineConnected, setBeelineConnected] = useState(false);
   const [hiveDBs, setHiveDBs] = useState({ default: { tables: {} } });
   const [currentHiveDB, setCurrentHiveDB] = useState("default");
   const [hiveQueries, setHiveQueries] = useState([]);
   // ── Terminal tabs ──
   const [termTabs, setTermTabs] = useState([{ id: 1, name: "Terminal 1" }]);
   const [activeTermTab, setActiveTermTab] = useState(1);
-  const [termTabLines, setTermTabLines] = useState({ 1: null }); // null = use main lines
-  const [termTabCwd, setTermTabCwd] = useState({});
+  const [termTabState, setTermTabState] = useState({
+    1: { lines: welcomeLines, cwd: "/home/hadoop", history: [], histIdx: -1, input: "", sshNode: null, sshCwd: "/home/hadoop", beelineMode: false, beelineConnected: false }
+  });
   const nextTermTabId = useRef(2);
   const termRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
+
+  // ── Active tab state accessors ──
+  const activeTabState = termTabState[activeTermTab] || termTabState[1];
+  const lines = activeTabState.lines;
+  const input = activeTabState.input;
+  const cwd = activeTabState.cwd;
+  const history = activeTabState.history;
+  const histIdx = activeTabState.histIdx;
+  const sshNode = activeTabState.sshNode;
+  const sshCwd = activeTabState.sshCwd;
+  const beelineMode = activeTabState.beelineMode;
+  const beelineConnected = activeTabState.beelineConnected;
+
+  const updateTab = (id, patch) => setTermTabState(prev => ({
+    ...prev,
+    [id]: { ...prev[id], ...patch }
+  }));
+  const setLines = (updater) => setTermTabState(prev => {
+    const cur = prev[activeTermTab];
+    return { ...prev, [activeTermTab]: { ...cur, lines: typeof updater === "function" ? updater(cur.lines) : updater } };
+  });
+  const setInput = (val) => updateTab(activeTermTab, { input: val });
+  const setCwd = (val) => updateTab(activeTermTab, { cwd: val });
+  const setHistory = (updater) => setTermTabState(prev => {
+    const cur = prev[activeTermTab];
+    return { ...prev, [activeTermTab]: { ...cur, history: typeof updater === "function" ? updater(cur.history) : updater } };
+  });
+  const setHistIdx = (val) => updateTab(activeTermTab, { histIdx: val });
+  const setSshNode = (val) => updateTab(activeTermTab, { sshNode: val });
+  const setSshCwd = (val) => updateTab(activeTermTab, { sshCwd: val });
+  const setBeelineMode = (val) => updateTab(activeTermTab, { beelineMode: val });
+  const setBeelineConnected = (val) => updateTab(activeTermTab, { beelineConnected: val });
 
   // ── Load from persistent storage ──
   useEffect(() => {
@@ -1584,10 +1608,10 @@ export default function HadoopVMSimulator() {
           {termTabs.map(tab => (
             <div key={tab.id} style={{ display: "flex", alignItems: "center", background: activeTermTab === tab.id ? "#1a1a1a" : "transparent", borderBottom: activeTermTab === tab.id ? "2px solid #8ec07c" : "2px solid transparent", borderRadius: "3px 3px 0 0" }}>
               <button onClick={() => setActiveTermTab(tab.id)} style={{ padding: "5px 8px", color: activeTermTab === tab.id ? "#8ec07c" : "#555", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 10 }}>{tab.name}</button>
-              {termTabs.length > 1 && <button onClick={() => { setTermTabs(prev => prev.filter(t => t.id !== tab.id)); if (activeTermTab === tab.id) setActiveTermTab(termTabs.find(t => t.id !== tab.id)?.id || 1); setTermTabLines(prev => { const n = { ...prev }; delete n[tab.id]; return n; }); }} style={{ padding: "2px 4px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 9, lineHeight: 1 }}>✕</button>}
+              {termTabs.length > 1 && <button onClick={() => { const remaining = termTabs.filter(t => t.id !== tab.id); setTermTabs(remaining); const nextId = activeTermTab === tab.id ? (remaining[0]?.id || 1) : activeTermTab; if (activeTermTab === tab.id) setActiveTermTab(nextId); setTermTabState(prev => { const n = { ...prev }; delete n[tab.id]; return n; }); }} style={{ padding: "2px 4px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 9, lineHeight: 1 }}>✕</button>}
             </div>
           ))}
-          <button onClick={() => { const id = nextTermTabId.current++; setTermTabs(prev => [...prev, { id, name: `Terminal ${id}` }]); setActiveTermTab(id); setTermTabLines(prev => ({ ...prev, [id]: [] })); }} style={{ padding: "3px 8px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 14, lineHeight: 1 }} title="Nueva pestaña de terminal">+</button>
+          <button onClick={() => { const id = nextTermTabId.current++; setTermTabs(prev => [...prev, { id, name: `Terminal ${id}` }]); setActiveTermTab(id); setTermTabState(prev => ({ ...prev, [id]: { lines: welcomeLines, cwd: "/home/hadoop", history: [], histIdx: -1, input: "", sshNode: null, sshCwd: "/home/hadoop", beelineMode: false, beelineConnected: false } })); }} style={{ padding: "3px 8px", color: "#555", border: "none", background: "transparent", cursor: "pointer", fontSize: 14, lineHeight: 1 }} title="Nueva pestaña de terminal">+</button>
         </>}
       </div>
 
