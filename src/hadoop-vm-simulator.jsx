@@ -1358,7 +1358,8 @@ export default function HadoopVMSimulator() {
 
   // ── Beeline/HiveQL processor ──
   const processBeelineCommand = useCallback((cmd) => {
-    const trimmed = cmd.trim().replace(/;\s*$/, "");
+    // Normalize: collapse all whitespace (newlines, tabs, multiple spaces) to single space
+    const trimmed = cmd.trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
     const lower = trimmed.toLowerCase();
 
     // ── Helper: render table from cols + rows ──
@@ -2127,26 +2128,63 @@ export default function HadoopVMSimulator() {
         return workCols.findIndex(c => c.toLowerCase() === cleanExpr || c.toLowerCase().endsWith("." + cleanExpr));
       };
 
+      // ── Split top-level comma list, respecting parens AND CASE...END blocks ──
+      const splitTopLevel = (part) => {
+        const items = []; let depth = 0; let caseDepth = 0; let cur = "";
+        const words = part.split(/(\s+|[(),])/); // tokenize
+        // simpler char-by-char with CASE/END word tracking
+        let i = 0;
+        while (i < part.length) {
+          const ch = part[i];
+          if (ch === "(") { depth++; cur += ch; i++; continue; }
+          if (ch === ")") { depth--; cur += ch; i++; continue; }
+          if (ch === "," && depth === 0 && caseDepth === 0) { items.push(cur.trim()); cur = ""; i++; continue; }
+          // check for CASE / END keywords at depth 0
+          if (depth === 0) {
+            const rest5 = part.slice(i).toUpperCase();
+            if (rest5.startsWith("CASE") && /^CASE[\s(]/.test(rest5)) { caseDepth++; cur += part.slice(i, i + 4); i += 4; continue; }
+            if (rest5.startsWith("END") && /^END(\s|,|$)/.test(rest5) && caseDepth > 0) { caseDepth--; cur += part.slice(i, i + 3); i += 3; continue; }
+          }
+          cur += ch; i++;
+        }
+        if (cur.trim()) items.push(cur.trim());
+        return items;
+      };
+
+      // ── Evaluate inner expression of an aggregate (handles CASE WHEN inside SUM/AVG/etc.) ──
+      const evalAggInner = (innerExpr, grpRows) => {
+        const lInner = innerExpr.trim().toLowerCase();
+        // CASE WHEN col op val THEN numExpr ELSE numExpr END
+        const caseM = innerExpr.match(/CASE\s+WHEN\s+(.+?)\s+THEN\s+(.+?)\s+ELSE\s+(.+?)\s+END/i);
+        if (caseM) {
+          return grpRows.map(r => {
+            const condResult = evalCond(r, workCols, caseM[1].trim());
+            const v = condResult ? caseM[2].trim() : caseM[3].trim();
+            return parseFloat(v.replace(/['"]/g, "")) || 0;
+          });
+        }
+        // plain column
+        const ci = resolveColIdx(lInner);
+        return grpRows.map(r => parseFloat(r[ci] ?? 0) || 0);
+      };
+
       // Parse selected columns & detect aggregates
       const parseSelCols = (part) => {
         if (part.trim() === "*") return workCols.map((c, i) => ({ expr: c, label: c, idx: i, agg: null }));
-        // split by comma respecting parens
-        const parts2 = []; let depth2 = 0; let cur = "";
-        for (const ch of part) { if (ch === "(" ) depth2++; else if (ch === ")") depth2--; if (ch === "," && depth2 === 0) { parts2.push(cur.trim()); cur = ""; } else cur += ch; }
-        if (cur.trim()) parts2.push(cur.trim());
-        return parts2.map(p => {
-          const asM = p.match(/^(.*?)\s+AS\s+(\w+)$/i);
+        const parts2 = splitTopLevel(part);
+        return parts2.filter(p => p).map(p => {
+          // Extract AS alias — must be at the end and not inside CASE...END
+          const asM = p.match(/^([\s\S]+?)\s+AS\s+(\w+)$/i);
           const expr = asM ? asM[1].trim() : p.trim();
-          const label = asM ? asM[2] : (expr.includes("(") ? expr : p.trim());
-          const lExpr = expr.toLowerCase();
-          if (lExpr.startsWith("count(distinct ")) { const inner = expr.match(/count\(distinct\s+(\w+)\)/i); return { expr, label, idx: -1, agg: "countdistinct", col: inner?.[1] }; }
-          if (lExpr.startsWith("count(")) return { expr, label, idx: -1, agg: "count" };
-          if (lExpr.startsWith("sum(")) { const inner = expr.match(/sum\((\w+)\)/i); return { expr, label, idx: -1, agg: "sum", col: inner?.[1] }; }
-          if (lExpr.startsWith("avg(")) { const inner = expr.match(/avg\((\w+)\)/i); return { expr, label, idx: -1, agg: "avg", col: inner?.[1] }; }
-          if (lExpr.startsWith("max(")) { const inner = expr.match(/max\((\w+)\)/i); return { expr, label, idx: -1, agg: "max", col: inner?.[1] }; }
-          if (lExpr.startsWith("min(")) { const inner = expr.match(/min\((\w+)\)/i); return { expr, label, idx: -1, agg: "min", col: inner?.[1] }; }
-          // CASE WHEN
-          if (lExpr.startsWith("case")) return { expr, label, idx: -1, agg: "case" };
+          const label = asM ? asM[2] : (expr.includes("(") || expr.toUpperCase().startsWith("CASE") ? expr : p.trim());
+          const lExpr = expr.toLowerCase().trim();
+          if (/^count\s*\(\s*distinct\s+/i.test(expr)) { const inner = expr.match(/count\s*\(\s*distinct\s+(\w+)\s*\)/i); return { expr, label, idx: -1, agg: "countdistinct", col: inner?.[1] }; }
+          if (/^count\s*\(/i.test(expr)) return { expr, label, idx: -1, agg: "count" };
+          if (/^sum\s*\(/i.test(expr)) { const inner = expr.match(/^sum\s*\((.+)\)$/i); return { expr, label, idx: -1, agg: "sum", innerExpr: inner?.[1]?.trim() }; }
+          if (/^avg\s*\(/i.test(expr)) { const inner = expr.match(/^avg\s*\((.+)\)$/i); return { expr, label, idx: -1, agg: "avg", innerExpr: inner?.[1]?.trim() }; }
+          if (/^max\s*\(/i.test(expr)) { const inner = expr.match(/^max\s*\((.+)\)$/i); return { expr, label, idx: -1, agg: "max", innerExpr: inner?.[1]?.trim() }; }
+          if (/^min\s*\(/i.test(expr)) { const inner = expr.match(/^min\s*\((.+)\)$/i); return { expr, label, idx: -1, agg: "min", innerExpr: inner?.[1]?.trim() }; }
+          if (/^case\b/i.test(expr)) return { expr, label, idx: -1, agg: "case" };
           return { expr, label, idx: resolveColIdx(expr), agg: null };
         });
       };
@@ -2171,10 +2209,9 @@ export default function HadoopVMSimulator() {
             if (!sd.agg) { const gi = resolveColIdx(sd.expr); return gi >= 0 ? grpRows[0][gi] : ""; }
             if (sd.agg === "count") return String(grpRows.length);
             if (sd.agg === "countdistinct") { const ci = resolveColIdx(sd.col); const uniq = new Set(grpRows.map(r => r[ci])); return String(uniq.size); }
-            const ci = resolveColIdx(sd.col);
-            const nums = grpRows.map(r => parseFloat(r[ci]) || 0);
+            const nums = evalAggInner(sd.innerExpr || sd.col || "", grpRows);
             if (sd.agg === "sum") return String(nums.reduce((a, b) => a + b, 0));
-            if (sd.agg === "avg") return String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2));
+            if (sd.agg === "avg") return nums.length ? String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(4).replace(/\.?0+$/, "")) : "0";
             if (sd.agg === "max") return String(Math.max(...nums));
             if (sd.agg === "min") return String(Math.min(...nums));
             return "";
@@ -2193,10 +2230,9 @@ export default function HadoopVMSimulator() {
           if (!sd.agg) { const gi = sd.idx; return gi >= 0 ? (workRows[0]?.[gi] ?? "NULL") : "NULL"; }
           if (sd.agg === "count") return String(workRows.length);
           if (sd.agg === "countdistinct") { const ci = resolveColIdx(sd.col); const uniq = new Set(workRows.map(r => r[ci])); return String(uniq.size); }
-          const ci = resolveColIdx(sd.col);
-          const nums = workRows.map(r => parseFloat(r[ci]) || 0);
+          const nums = evalAggInner(sd.innerExpr || sd.col || "", workRows);
           if (sd.agg === "sum") return String(nums.reduce((a, b) => a + b, 0));
-          if (sd.agg === "avg") return String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2));
+          if (sd.agg === "avg") return nums.length ? String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(4).replace(/\.?0+$/, "")) : "0";
           if (sd.agg === "max") return String(Math.max(...nums));
           if (sd.agg === "min") return String(Math.min(...nums));
           return "";
@@ -2232,13 +2268,17 @@ export default function HadoopVMSimulator() {
       // ── Evaluate a cell value for non-grouped output ──
       const evalCell = (r, sd) => {
         if (sd.agg === "case") {
-          // CASE WHEN col op val THEN x ELSE y END
-          const caseM = sd.expr.match(/CASE\s+WHEN\s+(\w+)\s*(=|!=|>|<)\s*['"]?(.*?)['"]?\s+THEN\s+['"]?(.*?)['"]?\s+ELSE\s+['"]?(.*?)['"]?\s+END/i);
-          if (caseM) {
-            const ci = resolveColIdx(caseM[1]); const op = caseM[2]; const val = caseM[3]; const thenV = caseM[4]; const elseV = caseM[5];
-            return evalCond(r, workCols, `${caseM[1]}${op}${val}`) ? thenV : elseV;
-          }
+          const caseM = sd.expr.match(/CASE\s+WHEN\s+(.+?)\s+THEN\s+['"]?(.*?)['"]?\s+ELSE\s+['"]?(.*?)['"]?\s+END/i);
+          if (caseM) return evalCond(r, workCols, caseM[1].trim()) ? caseM[2] : caseM[3];
           return "NULL";
+        }
+        if (sd.agg && sd.agg !== "case") {
+          // scalar aggregate on a single row (edge case)
+          const nums = evalAggInner(sd.innerExpr || sd.col || "", [r]);
+          if (sd.agg === "sum") return String(nums[0] ?? 0);
+          if (sd.agg === "max") return String(nums[0] ?? 0);
+          if (sd.agg === "min") return String(nums[0] ?? 0);
+          return String(nums[0] ?? "NULL");
         }
         if (sd.idx >= 0) return r[sd.idx] ?? "NULL";
         return "NULL";
