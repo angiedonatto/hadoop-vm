@@ -1364,7 +1364,8 @@ export default function HadoopVMSimulator() {
     // ── Helper: render table from cols + rows ──
     const renderTable = (cols, rows) => {
       if (rows.length === 0) {
-        const sep = "+" + cols.map(c => "-".repeat(c.length + 2)).join("+") + "+";
+        const maxWs = cols.map(c => c.length);
+        const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
         return `${sep}\n| ${cols.join(" | ")} |\n${sep}\n${sep}\n0 rows selected`;
       }
       const maxWs = cols.map((c, i) => Math.max(c.length, ...rows.map(r => String(r[i] ?? "NULL").length)));
@@ -1375,31 +1376,69 @@ export default function HadoopVMSimulator() {
     };
 
     // ── Helper: MapReduce job log ──
-    const mrLog = (jobName, appId) =>
-      `INFO  : Compiling command(queryId=hive_${Date.now()})\nINFO  : Semantic Analysis Completed\nINFO  : Returning Hive schema field info\nINFO  : Starting job = job_1700000000000_${String(appId).padStart(4, "0")}, alias = ${jobName}\nINFO  : Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 1\nINFO  : map = 0%,  reduce = 0%\nINFO  : map = 100%,  reduce = 0%\nINFO  : map = 100%,  reduce = 100%\nINFO  : Ended Job = job_1700000000000_${String(appId).padStart(4, "0")}`;
+    const mrLog = (jobName, appId) => {
+      const jobId = `job_1700000000000_${String(appId).padStart(4, "0")}`;
+      return `INFO  : Compiling command(queryId=hive_${Date.now()})\nINFO  : Semantic Analysis Completed\nINFO  : Returning Hive schema field info\nINFO  : Starting job = ${jobId}, alias = ${jobName}\nINFO  : Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 1\nINFO  : map = 0%,  reduce = 0%\nINFO  : map = 100%,  reduce = 0%\nINFO  : map = 100%,  reduce = 100%\nINFO  : Ended Job = ${jobId}`;
+    };
 
-    // ── Helper: apply WHERE filter ──
+    // ── Helper: evaluate single WHERE condition against a row ──
+    const evalCond = (row, colNames, cond) => {
+      const c = cond.trim();
+      const nullM = c.match(/^(\w+)\s+IS\s+(NOT\s+)?NULL$/i);
+      if (nullM) { const ci = colNames.indexOf(nullM[1]); if (ci < 0) return true; const v = row[ci]; return nullM[2] ? (v != null && v !== "" && v !== "NULL") : (v == null || v === "" || v === "NULL"); }
+      const btwM = c.match(/^(\w+)\s+BETWEEN\s+([^\s]+)\s+AND\s+([^\s]+)$/i);
+      if (btwM) { const ci = colNames.indexOf(btwM[1]); if (ci < 0) return true; const v = parseFloat(row[ci]); return v >= parseFloat(btwM[2]) && v <= parseFloat(btwM[3]); }
+      const inM = c.match(/^(\w+)\s+NOT\s+IN\s*\(([^)]+)\)$/i);
+      if (inM) { const ci = colNames.indexOf(inM[1]); if (ci < 0) return true; const vals = inM[2].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")); return !vals.includes(String(row[ci] ?? "")); }
+      const inM2 = c.match(/^(\w+)\s+IN\s*\(([^)]+)\)$/i);
+      if (inM2) { const ci = colNames.indexOf(inM2[1]); if (ci < 0) return true; const vals = inM2[2].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")); return vals.includes(String(row[ci] ?? "")); }
+      const likeM = c.match(/^(\w+)\s+NOT\s+LIKE\s+['"](.*?)['"]$/i);
+      if (likeM) { const ci = colNames.indexOf(likeM[1]); if (ci < 0) return true; const pat = likeM[2].replace(/%/g, ".*").replace(/_/g, "."); return !new RegExp("^" + pat + "$", "i").test(String(row[ci] ?? "")); }
+      const likeM2 = c.match(/^(\w+)\s+LIKE\s+['"](.*?)['"]$/i);
+      if (likeM2) { const ci = colNames.indexOf(likeM2[1]); if (ci < 0) return true; const pat = likeM2[2].replace(/%/g, ".*").replace(/_/g, "."); return new RegExp("^" + pat + "$", "i").test(String(row[ci] ?? "")); }
+      const cmpM = c.match(/^(\w+)\s*(=|!=|<>|>=|<=|>|<)\s*['"]?(.*?)['"]?$/);
+      if (cmpM) { const ci = colNames.indexOf(cmpM[1]); if (ci < 0) return true; const rv = String(row[ci] ?? ""); const op = cmpM[2]; const val = cmpM[3]; const rn = parseFloat(rv); const vn = parseFloat(val); const numOk = !isNaN(rn) && !isNaN(vn); if (op === "=" || op === "==") return numOk ? rn === vn : rv === val; if (op === "!=" || op === "<>") return numOk ? rn !== vn : rv !== val; if (op === ">") return rn > vn; if (op === "<") return rn < vn; if (op === ">=") return rn >= vn; if (op === "<=") return rn <= vn; }
+      return true;
+    };
+
+    // ── Helper: apply full WHERE clause (supports AND / OR) ──
     const applyWhere = (rows, colNames, clause) => {
       if (!clause) return rows;
       return rows.filter(row => {
-        const lower = clause.toLowerCase().trim();
-        // IS NULL / IS NOT NULL
-        const nullM = clause.match(/(\w+)\s+IS\s+(NOT\s+)?NULL/i);
-        if (nullM) { const ci = colNames.indexOf(nullM[1]); if (ci < 0) return true; const v = row[ci]; return nullM[2] ? (v != null && v !== "" && v !== "NULL") : (v == null || v === "" || v === "NULL"); }
-        // BETWEEN
-        const btw = clause.match(/(\w+)\s+BETWEEN\s+([^\s]+)\s+AND\s+([^\s]+)/i);
-        if (btw) { const ci = colNames.indexOf(btw[1]); if (ci < 0) return true; const v = parseFloat(row[ci]); return v >= parseFloat(btw[2]) && v <= parseFloat(btw[3]); }
-        // IN (...)
-        const inM = clause.match(/(\w+)\s+IN\s*\(([^)]+)\)/i);
-        if (inM) { const ci = colNames.indexOf(inM[1]); if (ci < 0) return true; const vals = inM[2].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")); return vals.includes(String(row[ci] ?? "")); }
-        // LIKE
-        const likeM = clause.match(/(\w+)\s+LIKE\s+['"](.*?)['"]/i);
-        if (likeM) { const ci = colNames.indexOf(likeM[1]); if (ci < 0) return true; const pat = likeM[2].replace(/%/g, ".*").replace(/_/g, "."); return new RegExp("^" + pat + "$", "i").test(String(row[ci] ?? "")); }
-        // comparison
-        const cmpM = clause.match(/(\w+)\s*(=|!=|<>|>=|<=|>|<)\s*['"]*([^'"]*?)['"]*$/);
-        if (cmpM) { const ci = colNames.indexOf(cmpM[1]); if (ci < 0) return true; const rv = row[ci]; const op = cmpM[2]; const val = cmpM[3]; if (op === "=" || op === "==") return String(rv) == String(val); if (op === "!=" || op === "<>") return String(rv) != String(val); if (op === ">") return parseFloat(rv) > parseFloat(val); if (op === "<") return parseFloat(rv) < parseFloat(val); if (op === ">=") return parseFloat(rv) >= parseFloat(val); if (op === "<=") return parseFloat(rv) <= parseFloat(val); }
-        return true;
+        // Split by OR first (lowest precedence)
+        const orParts = clause.split(/\s+OR\s+/i);
+        return orParts.some(orPart => {
+          // Split by AND
+          const andParts = orPart.split(/\s+AND\s+/i);
+          return andParts.every(cond => evalCond(row, colNames, cond.trim()));
+        });
       });
+    };
+
+    // ── Helper: parse column list handling nested parens (e.g. DECIMAL(10,2)) ──
+    const parseColList = (str) => {
+      const cols = []; let depth = 0; let cur = "";
+      for (const ch of str) {
+        if (ch === "(") { depth++; cur += ch; }
+        else if (ch === ")") { depth--; cur += ch; }
+        else if (ch === "," && depth === 0) { if (cur.trim()) cols.push(cur.trim()); cur = ""; }
+        else cur += ch;
+      }
+      if (cur.trim()) cols.push(cur.trim());
+      return cols.map(c => { const p = c.trim().split(/\s+/); return { name: p[0], type: p.slice(1).join(" ") || "STRING" }; }).filter(c => c.name);
+    };
+
+    // ── Helper: look up a file node in hdfsFS (checks parent dir's files) ──
+    const getHdfsFile = (path) => {
+      const abs = path.startsWith("/") ? path : `/user/hadoop/${path}`;
+      // Direct node
+      if (hdfsFS[abs] && hdfsFS[abs].type === "file") return { content: hdfsFS[abs].content || "" };
+      // Check parent dir's files map
+      const parentPath = abs.substring(0, abs.lastIndexOf("/")) || "/";
+      const fname = abs.substring(abs.lastIndexOf("/") + 1);
+      const parent = hdfsFS[parentPath];
+      if (parent?.files?.[fname] !== undefined) return { content: parent.files[fname] };
+      return null;
     };
 
     // ══════════════════════════════
@@ -1566,9 +1605,9 @@ export default function HadoopVMSimulator() {
     // DATABASE commands
     // ══════════════════════════════
     if (lower.startsWith("create database ") || lower.startsWith("create schema ")) {
-      const parts = trimmed.split(/\s+/);
-      const ifNotExists = lower.includes("if not exists");
-      const dbName = ifNotExists ? parts[5] : parts[2];
+      const ifNotExists = /if\s+not\s+exists/i.test(trimmed);
+      const dbNameM = trimmed.match(/create\s+(?:database|schema)\s+(?:if\s+not\s+exists\s+)?(\w+)/i);
+      const dbName = dbNameM ? dbNameM[1] : null;
       if (!dbName) return [out("Error: Falta nombre de base de datos", "error")];
       if (hiveDBs[dbName]) {
         if (ifNotExists) return [out(`No rows affected`)];
@@ -1580,9 +1619,9 @@ export default function HadoopVMSimulator() {
       return [out(`INFO  : Compiling command: create database ${dbName}\nINFO  : Executing command\nNo rows affected\n\n✓ Base de datos '${dbName}' creada.\n  HDFS: ${whPath}`, "success")];
     }
     if (lower.startsWith("drop database ") || lower.startsWith("drop schema ")) {
-      const parts = trimmed.split(/\s+/);
-      const ifExists = lower.includes("if exists");
-      const dbName = ifExists ? parts[4] : parts[2];
+      const ifExists = /if\s+exists/i.test(trimmed);
+      const dbNameM = trimmed.match(/drop\s+(?:database|schema)\s+(?:if\s+exists\s+)?(\w+)/i);
+      const dbName = dbNameM ? dbNameM[1] : null;
       const cascade = lower.includes("cascade");
       if (!hiveDBs[dbName]) {
         if (ifExists) return [out("No rows affected")];
@@ -1606,23 +1645,32 @@ export default function HadoopVMSimulator() {
     // ══════════════════════════════
     if (lower.startsWith("create ")) {
       const isExternal = /create\s+external\s+table/i.test(trimmed);
-      const createRx = /create\s+(?:external\s+)?table\s+(?:if\s+not\s+exists\s+)?(\w+)\s*(?:\(([^)]*)\))?(.*)/is;
-      const cm = trimmed.match(createRx);
-      if (!cm) return [out("Error: Syntax error in CREATE TABLE", "error")];
-      const tName = cm[1];
-      const colStr = cm[2] || "";
-      const rest = cm[3] || "";
-      const restL = rest.toLowerCase();
-
       const ifNotExists = /if\s+not\s+exists/i.test(trimmed);
+
+      // Extract table name
+      const tNameM = trimmed.match(/create\s+(?:external\s+)?table\s+(?:if\s+not\s+exists\s+)?(\w+)/i);
+      if (!tNameM) return [out("Error: Syntax error in CREATE TABLE", "error")];
+      const tName = tNameM[1];
+
       if (ifNotExists && hiveDBs[currentHiveDB]?.tables[tName]) return [out("No rows affected")];
       if (!ifNotExists && hiveDBs[currentHiveDB]?.tables[tName]) return [out(`FAILED: Table ${tName} already exists`, "error")];
 
-      // Parse columns (skip if CREATE TABLE AS SELECT)
-      const colDefs = colStr ? colStr.split(",").map(c => {
-        const p = c.trim().split(/\s+/);
-        return { name: p[0], type: (p[1] || "STRING").replace(/[()]/g, "") };
-      }).filter(c => c.name) : [];
+      // Extract column list: find matching parens after table name
+      // (handles DECIMAL(10,2) and multi-line)
+      const afterName = trimmed.slice(trimmed.toLowerCase().indexOf(tName.toLowerCase()) + tName.length).trim();
+      let colStr = "";
+      let rest = afterName;
+      if (afterName.startsWith("(")) {
+        let depth = 0; let i = 0; let colEnd = -1;
+        for (; i < afterName.length; i++) {
+          if (afterName[i] === "(") depth++;
+          else if (afterName[i] === ")") { depth--; if (depth === 0) { colEnd = i; break; } }
+        }
+        if (colEnd > 0) { colStr = afterName.slice(1, colEnd); rest = afterName.slice(colEnd + 1).trim(); }
+      }
+
+      // Parse columns using paren-aware splitter
+      const colDefs = colStr ? parseColList(colStr) : [];
 
       // ROW FORMAT
       let rowFormat = null;
@@ -1939,18 +1987,17 @@ export default function HadoopVMSimulator() {
       if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
       let nd = null;
       let fileRows = [];
+      const tblDelim = db.tables[tName].rowFormat?.match(/TERMINATED BY ['"](.*?)['"]/)?.[1] || ",";
+      const splitDelim = (line) => tblDelim === "\\t" || tblDelim === "\t" ? line.split("\t") : line.split(tblDelim);
       if (isLocal) {
         nd = getLocalNode(resolvePath(filePath, cwd));
         if (!nd || nd.type !== "file") return [out(`FAILED: File not found (local): ${filePath}`, "error")];
-        const delim = db.tables[tName].rowFormat?.match(/TERMINATED BY ['"](.*?)['"]/)?.[1] || ",";
-        fileRows = (nd.content || "").split("\n").filter(l => l.trim()).map(l => l.split(new RegExp(delim === "\t" ? "\t" : delim)));
+        fileRows = (nd.content || "").split("\n").filter(l => l.trim()).map(splitDelim);
       } else {
-        // HDFS path
-        const absPath = filePath.startsWith("/") ? filePath : `/user/hadoop/${filePath}`;
-        const hNode = hdfsFS[absPath];
-        if (!hNode) return [out(`FAILED: File not found in HDFS: ${filePath}`, "error")];
-        const delim = db.tables[tName].rowFormat?.match(/TERMINATED BY ['"](.*?)['"]/)?.[1] || ",";
-        fileRows = (hNode.content || "").split("\n").filter(l => l.trim()).map(l => l.split(new RegExp(delim === "\t" ? "\t" : delim)));
+        // HDFS path — check both direct node and parent dir's files map
+        const hNode = getHdfsFile(filePath);
+        if (!hNode) return [out(`FAILED: File not found in HDFS: ${filePath}\nTip: usa LOAD DATA LOCAL INPATH para archivos locales`, "error")];
+        fileRows = (hNode.content || "").split("\n").filter(l => l.trim()).map(splitDelim);
       }
       setHiveDBs(prev => {
         const d = { ...prev[currentHiveDB] };
@@ -1967,22 +2014,59 @@ export default function HadoopVMSimulator() {
     // SELECT (full)
     // ══════════════════════════════
     if (lower.startsWith("select ")) {
+      // ── Step-by-step clause extractor ──
+      // Find the first FROM that is not inside parens
+      let fromIdx = -1;
+      { let d = 0;
+        for (let i = 0; i < lower.length - 4; i++) {
+          if (lower[i] === "(") d++;
+          else if (lower[i] === ")") d--;
+          else if (d === 0 && lower.slice(i, i + 5) === " from" && /\s/.test(lower[i + 5] || " ")) { fromIdx = i + 1; break; }
+        }
+      }
+      if (fromIdx < 0) return [out("Error: Syntax error in SELECT — falta FROM", "error")];
+
+      const selPart = trimmed.slice(7, fromIdx).trim(); // everything between SELECT and FROM
+
+      // Everything after FROM keyword
+      const afterFrom = trimmed.slice(fromIdx + 4).trim();
+
+      // LIMIT
+      const limitM = afterFrom.match(/\blimit\s+(\d+)\s*$/i);
+      const limitN = limitM ? parseInt(limitM[1]) : null;
+
+      // ORDER BY (before LIMIT)
+      const orderByM = afterFrom.match(/\border\s+by\s+(.+?)(?=\s+limit\s+\d+\s*$|$)/i);
+      const orderByClause = orderByM ? orderByM[1].trim() : null;
+
+      // HAVING (before ORDER BY / LIMIT)
+      const havingM = afterFrom.match(/\bhaving\s+(.+?)(?=\s+order\s+by\b|\s+limit\s+\d+\s*$|$)/i);
+      const havingClause = havingM ? havingM[1].trim() : null;
+
+      // GROUP BY (before HAVING / ORDER BY / LIMIT)
+      const groupByM = afterFrom.match(/\bgroup\s+by\s+(.+?)(?=\s+having\b|\s+order\s+by\b|\s+limit\s+\d+\s*$|$)/i);
+      const groupByClause = groupByM ? groupByM[1].trim() : null;
+
+      // WHERE (before GROUP BY / HAVING / ORDER BY / LIMIT)
+      const whereM = afterFrom.match(/\bwhere\s+(.+?)(?=\s+group\s+by\b|\s+having\b|\s+order\s+by\b|\s+limit\s+\d+\s*$|$)/i);
+      const whereClause = whereM ? whereM[1].trim() : null;
+
+      // FROM clause: table [alias] — everything before first JOIN/WHERE/GROUP/HAVING/ORDER/LIMIT
+      const CLAUSE_KWS = /\s+(?:(?:inner|left|right|full|cross)\s+(?:outer\s+)?)?join\b|\s+where\b|\s+group\s+by\b|\s+having\b|\s+order\s+by\b|\s+limit\b/i;
+      const fromClauseM = afterFrom.match(/^(.+?)(?=\s+(?:(?:inner|left|right|full|cross)\s+(?:outer\s+)?)?join\b|\s+where\b|\s+group\s+by\b|\s+having\b|\s+order\s+by\b|\s+limit\b|$)/i);
+      const fromClause = fromClauseM ? fromClauseM[1].trim() : afterFrom.split(CLAUSE_KWS)[0].trim();
+
       // JOIN detection
-      const joinM = trimmed.match(/select\s+(.+?)\s+from\s+(\w+)\s+(?:(\w+)\s+)?(?:(?:inner\s+|left\s+(?:outer\s+)?|right\s+(?:outer\s+)?|full\s+(?:outer\s+)?)?join\s+(\w+)\s+(?:(\w+)\s+)?on\s+(.+?))?(?:\s+where\s+(.+?))?(?:\s+group\s+by\s+(.+?))?(?:\s+having\s+(.+?))?(?:\s+order\s+by\s+(.+?))?(?:\s+limit\s+(\d+))?$/is);
+      const joinM2 = afterFrom.match(/\b(?:inner\s+|left\s+(?:outer\s+)?|right\s+(?:outer\s+)?|full\s+(?:outer\s+)?|cross\s+)?join\s+(\w+)(?:\s+(\w+))?\s+on\s+(.+?)(?=\s+(?:where|group\s+by|having|order\s+by|limit)\b|$)/i);
 
-      if (!joinM) return [out("Error: Syntax error in SELECT", "error")];
-
-      const selPart = joinM[1].trim();
-      const tName1 = joinM[2];
-      const alias1 = joinM[3] || tName1;
-      const tName2 = joinM[4] || null;
-      const alias2 = joinM[5] || tName2;
-      const joinOnClause = joinM[6] || null;
-      const whereClause = joinM[7] || null;
-      const groupByClause = joinM[8] || null;
-      const havingClause = joinM[9] || null;
-      const orderByClause = joinM[10] || null;
-      const limitN = joinM[11] ? parseInt(joinM[11]) : null;
+      // Parse FROM clause for table name + alias
+      const RESERVED = new Set(["where","join","group","order","limit","having","inner","left","right","full","cross","on","tablesample"]);
+      const fromParts = fromClause.split(/\s+/);
+      const tName1 = fromParts[0];
+      const alias1 = (fromParts[1] && !RESERVED.has(fromParts[1].toLowerCase())) ? fromParts[1] : tName1;
+      const tName2 = joinM2 ? joinM2[1] : null;
+      const alias2 = (joinM2 && joinM2[2] && !RESERVED.has(joinM2[2].toLowerCase())) ? joinM2[2] : tName2;
+      const joinOnClause = joinM2 ? joinM2[3].trim() : null;
 
       const db = hiveDBs[currentHiveDB];
       if (!db?.tables[tName1]) return [out(`FAILED: Table ${tName1} does not exist`, "error")];
@@ -2121,46 +2205,50 @@ export default function HadoopVMSimulator() {
         isGrouped = true;
       }
 
-      // ORDER BY
-      if (orderByClause && !isGrouped) {
-        const obM = orderByClause.match(/(\w+)(?:\s+(asc|desc))?/i);
-        if (obM) {
-          const obIdx = resolveColIdx(obM[1]);
-          const desc = (obM[2] || "asc").toLowerCase() === "desc";
-          groupedRows = [...groupedRows].sort((a, b) => { const av = a[obIdx]; const bv = b[obIdx]; const an = parseFloat(av); const bn2 = parseFloat(bv); if (!isNaN(an) && !isNaN(bn2)) return desc ? bn2 - an : an - bn2; return desc ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv)); });
+      // ORDER BY (applies to both grouped and non-grouped results)
+      if (orderByClause) {
+        // Support multiple sort keys: col1 DESC, col2 ASC
+        const obParts = orderByClause.split(",").map(s => s.trim());
+        const sortKeys = obParts.map(s => { const m = s.match(/^(\w+(?:\.\w+)?)\s*(asc|desc)?$/i); return m ? { col: m[1], desc: (m[2] || "asc").toLowerCase() === "desc" } : null; }).filter(Boolean);
+        if (sortKeys.length > 0) {
+          groupedRows = [...groupedRows].sort((a, b) => {
+            for (const sk of sortKeys) {
+              const obIdx = isGrouped ? selDefs.findIndex(sd => sd.label.toLowerCase() === sk.col.toLowerCase()) : resolveColIdx(sk.col);
+              const av = String(a[obIdx] ?? ""); const bv = String(b[obIdx] ?? "");
+              const an = parseFloat(av); const bn2 = parseFloat(bv);
+              const numOk = !isNaN(an) && !isNaN(bn2);
+              let cmp = numOk ? (an - bn2) : av.localeCompare(bv);
+              if (sk.desc) cmp = -cmp;
+              if (cmp !== 0) return cmp;
+            }
+            return 0;
+          });
         }
       }
 
       // LIMIT
-      let finalRows = isGrouped ? groupedRows : groupedRows;
-      if (limitN) finalRows = finalRows.slice(0, limitN);
+      let finalRows = limitN ? groupedRows.slice(0, limitN) : groupedRows;
 
-      // Build output columns
-      let outCols, outRows;
-      if (isGrouped) {
-        outCols = selDefs.map(sd => sd.label);
-        outRows = finalRows;
-      } else {
-        outCols = selDefs.map(sd => sd.label);
-        outRows = finalRows.map(r => selDefs.map(sd => {
-          if (sd.agg === "case") {
-            // Simple CASE WHEN support
-            const caseM = sd.expr.match(/CASE\s+WHEN\s+(\w+)\s*(=|>|<|!=)\s*['"]*([^'"]*)['"]*\s+THEN\s+['"]*([^'"]*)['"]*\s+ELSE\s+['"]*([^'"]*)['"]*\s+END/i);
-            if (caseM) {
-              const ci = resolveColIdx(caseM[1]); const op = caseM[2]; const val = caseM[3]; const thenV = caseM[4]; const elseV = caseM[5];
-              const rv = r[ci]; let match = false;
-              if (op === "=") match = String(rv) == String(val);
-              else if (op === ">") match = parseFloat(rv) > parseFloat(val);
-              else if (op === "<") match = parseFloat(rv) < parseFloat(val);
-              else if (op === "!=") match = String(rv) != String(val);
-              return match ? thenV : elseV;
-            }
-            return "NULL";
+      // ── Evaluate a cell value for non-grouped output ──
+      const evalCell = (r, sd) => {
+        if (sd.agg === "case") {
+          // CASE WHEN col op val THEN x ELSE y END
+          const caseM = sd.expr.match(/CASE\s+WHEN\s+(\w+)\s*(=|!=|>|<)\s*['"]?(.*?)['"]?\s+THEN\s+['"]?(.*?)['"]?\s+ELSE\s+['"]?(.*?)['"]?\s+END/i);
+          if (caseM) {
+            const ci = resolveColIdx(caseM[1]); const op = caseM[2]; const val = caseM[3]; const thenV = caseM[4]; const elseV = caseM[5];
+            return evalCond(r, workCols, `${caseM[1]}${op}${val}`) ? thenV : elseV;
           }
-          if (sd.idx < 0) return "NULL";
-          return r[sd.idx] ?? "NULL";
-        }));
-      }
+          return "NULL";
+        }
+        if (sd.idx >= 0) return r[sd.idx] ?? "NULL";
+        return "NULL";
+      };
+
+      // Build output columns and rows
+      const outCols = selDefs.map(sd => sd.label);
+      const outRows = isGrouped
+        ? finalRows
+        : finalRows.map(r => selDefs.map(sd => evalCell(r, sd)));
 
       setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
       return [out(renderTable(outCols, outRows.map(r => Array.isArray(r) ? r : [r])))];
