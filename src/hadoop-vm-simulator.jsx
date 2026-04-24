@@ -1360,45 +1360,234 @@ export default function HadoopVMSimulator() {
   const processBeelineCommand = useCallback((cmd) => {
     const trimmed = cmd.trim().replace(/;\s*$/, "");
     const lower = trimmed.toLowerCase();
-    // Beeline meta-commands
-    if (trimmed === "!exit" || trimmed === "!quit") { setBeelineMode(false); setBeelineConnected(false); return [out("Closing: 0: jdbc:hive2://hadoop-virtualbox:10000\n(Beeline cerrado)", "system")]; }
-    if (trimmed.startsWith("!connect")) {
-      if (trimmed.includes("jdbc:hive2://hadoop-virtualbox:10000") || trimmed.includes("jdbc:hive2://hadoop-VirtualBox:10000")) {
-        setBeelineConnected(true);
-        return [out("Connecting to jdbc:hive2://hadoop-virtualbox:10000\nEnter username for jdbc:hive2://hadoop-virtualbox:10000:\nEnter password for jdbc:hive2://hadoop-virtualbox:10000:\nConnected to: Apache Hive (version 4.0.0)\nDriver: Hive JDBC (version 4.0.0)\nTransaction isolation: TRANSACTION_REPEATABLE_READ", "success")];
+
+    // ── Helper: render table from cols + rows ──
+    const renderTable = (cols, rows) => {
+      if (rows.length === 0) {
+        const sep = "+" + cols.map(c => "-".repeat(c.length + 2)).join("+") + "+";
+        return `${sep}\n| ${cols.join(" | ")} |\n${sep}\n${sep}\n0 rows selected`;
       }
-      return [out(`Error: Could not open connection. Check URL.`, "error")];
+      const maxWs = cols.map((c, i) => Math.max(c.length, ...rows.map(r => String(r[i] ?? "NULL").length)));
+      const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
+      const hdr = "| " + cols.map((c, i) => c.padEnd(maxWs[i])).join(" | ") + " |";
+      const body = rows.map(r => "| " + cols.map((c, i) => String(r[i] ?? "NULL").padEnd(maxWs[i])).join(" | ") + " |");
+      return `${sep}\n${hdr}\n${sep}\n${body.join("\n")}\n${sep}\n${rows.length} row${rows.length !== 1 ? "s" : ""} selected`;
+    };
+
+    // ── Helper: MapReduce job log ──
+    const mrLog = (jobName, appId) =>
+      `INFO  : Compiling command(queryId=hive_${Date.now()})\nINFO  : Semantic Analysis Completed\nINFO  : Returning Hive schema field info\nINFO  : Starting job = job_1700000000000_${String(appId).padStart(4, "0")}, alias = ${jobName}\nINFO  : Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 1\nINFO  : map = 0%,  reduce = 0%\nINFO  : map = 100%,  reduce = 0%\nINFO  : map = 100%,  reduce = 100%\nINFO  : Ended Job = job_1700000000000_${String(appId).padStart(4, "0")}`;
+
+    // ── Helper: apply WHERE filter ──
+    const applyWhere = (rows, colNames, clause) => {
+      if (!clause) return rows;
+      return rows.filter(row => {
+        const lower = clause.toLowerCase().trim();
+        // IS NULL / IS NOT NULL
+        const nullM = clause.match(/(\w+)\s+IS\s+(NOT\s+)?NULL/i);
+        if (nullM) { const ci = colNames.indexOf(nullM[1]); if (ci < 0) return true; const v = row[ci]; return nullM[2] ? (v != null && v !== "" && v !== "NULL") : (v == null || v === "" || v === "NULL"); }
+        // BETWEEN
+        const btw = clause.match(/(\w+)\s+BETWEEN\s+([^\s]+)\s+AND\s+([^\s]+)/i);
+        if (btw) { const ci = colNames.indexOf(btw[1]); if (ci < 0) return true; const v = parseFloat(row[ci]); return v >= parseFloat(btw[2]) && v <= parseFloat(btw[3]); }
+        // IN (...)
+        const inM = clause.match(/(\w+)\s+IN\s*\(([^)]+)\)/i);
+        if (inM) { const ci = colNames.indexOf(inM[1]); if (ci < 0) return true; const vals = inM[2].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")); return vals.includes(String(row[ci] ?? "")); }
+        // LIKE
+        const likeM = clause.match(/(\w+)\s+LIKE\s+['"](.*?)['"]/i);
+        if (likeM) { const ci = colNames.indexOf(likeM[1]); if (ci < 0) return true; const pat = likeM[2].replace(/%/g, ".*").replace(/_/g, "."); return new RegExp("^" + pat + "$", "i").test(String(row[ci] ?? "")); }
+        // comparison
+        const cmpM = clause.match(/(\w+)\s*(=|!=|<>|>=|<=|>|<)\s*['"]*([^'"]*?)['"]*$/);
+        if (cmpM) { const ci = colNames.indexOf(cmpM[1]); if (ci < 0) return true; const rv = row[ci]; const op = cmpM[2]; const val = cmpM[3]; if (op === "=" || op === "==") return String(rv) == String(val); if (op === "!=" || op === "<>") return String(rv) != String(val); if (op === ">") return parseFloat(rv) > parseFloat(val); if (op === "<") return parseFloat(rv) < parseFloat(val); if (op === ">=") return parseFloat(rv) >= parseFloat(val); if (op === "<=") return parseFloat(rv) <= parseFloat(val); }
+        return true;
+      });
+    };
+
+    // ══════════════════════════════
+    // BEELINE META-COMMANDS
+    // ══════════════════════════════
+    if (trimmed === "!exit" || trimmed === "!quit") {
+      setBeelineMode(false); setBeelineConnected(false);
+      return [out("Closing: 0: jdbc:hive2://hadoop-virtualbox:10000\n(Beeline cerrado)", "system")];
     }
-    if (!beelineConnected) return [out("Error: Not connected. Use:\n!connect jdbc:hive2://hadoop-virtualbox:10000", "error")];
+    if (trimmed.startsWith("!connect")) {
+      if (trimmed.match(/jdbc:hive2:\/\/hadoop-?virtualbox:10000/i)) {
+        setBeelineConnected(true);
+        return [out("Connecting to jdbc:hive2://hadoop-virtualbox:10000\nEnter username for jdbc:hive2://hadoop-virtualbox:10000: hadoop\nEnter password for jdbc:hive2://hadoop-virtualbox:10000: \nConnected to: Apache Hive (version 4.0.0)\nDriver: Hive JDBC (version 4.0.0)\nTransaction isolation: TRANSACTION_REPEATABLE_READ", "success")];
+      }
+      return [out("Error: Could not open connection. Check URL.", "error")];
+    }
+    if (trimmed.startsWith("!sh ")) {
+      if (!beelineConnected) return [out("Error: Not connected.", "error")];
+      const shCmd = trimmed.slice(4).trim();
+      const result = processCommand(shCmd);
+      return result;
+    }
+    if (trimmed === "!help" || trimmed === "help") {
+      return [out(
+        "Beeline / HiveQL — Comandos disponibles:\n" +
+        "\n  META-COMANDOS (beeline):\n" +
+        "  !connect jdbc:hive2://hadoop-virtualbox:10000\n" +
+        "  !exit | !quit              — cerrar conexión\n" +
+        "  !tables                    — listar tablas actuales\n" +
+        "  !columns <tabla>           — columnas de tabla\n" +
+        "  !describe <tabla>          — describir tabla\n" +
+        "  !sh <comando>              — ejecutar comando Linux\n" +
+        "  !set outputformat table    — formato de salida\n" +
+        "  !set verbose true/false    — verbosidad\n" +
+        "\n  DDL:\n" +
+        "  CREATE DATABASE [IF NOT EXISTS] <db>;\n" +
+        "  DROP DATABASE [IF EXISTS] <db> [CASCADE];\n" +
+        "  USE <db>;\n" +
+        "  CREATE [EXTERNAL] TABLE [IF NOT EXISTS] <t> (cols)\n" +
+        "    [ROW FORMAT DELIMITED FIELDS TERMINATED BY ',']\n" +
+        "    [ROW FORMAT SERDE '...' WITH SERDEPROPERTIES (...)]\n" +
+        "    [STORED AS ORC|TEXTFILE|PARQUET]\n" +
+        "    [TBLPROPERTIES (\"orc.compress\"=\"SNAPPY\")]\n" +
+        "    [PARTITIONED BY (col STRING)]\n" +
+        "    [CLUSTERED BY (col) INTO N BUCKETS]\n" +
+        "    [LOCATION '/hdfs/path'];\n" +
+        "  ALTER TABLE <t> ADD COLUMNS (col tipo);\n" +
+        "  DROP TABLE [IF EXISTS] <t>;\n" +
+        "  TRUNCATE TABLE <t>;\n" +
+        "\n  DML:\n" +
+        "  INSERT INTO [TABLE] <t> VALUES (...);\n" +
+        "  INSERT INTO TABLE <t> [PARTITION (col)] SELECT ...;\n" +
+        "  INSERT OVERWRITE TABLE <t> SELECT ...;\n" +
+        "  INSERT OVERWRITE LOCAL DIRECTORY '...' ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' SELECT ...;\n" +
+        "  LOAD DATA [LOCAL] INPATH '...' [OVERWRITE] INTO TABLE <t>;\n" +
+        "\n  QUERY:\n" +
+        "  SELECT [col|*|agg] FROM <t> [JOIN ...] [WHERE ...] [GROUP BY ...] [HAVING ...] [ORDER BY ...] [LIMIT n];\n" +
+        "  SELECT ... FROM <t> TABLESAMPLE(BUCKET n OUT OF m ON col);\n" +
+        "\n  SHOW/DESCRIBE:\n" +
+        "  SHOW DATABASES; SHOW TABLES; SHOW PARTITIONS <t>;\n" +
+        "  SHOW CREATE TABLE <t>;\n" +
+        "  DESCRIBE [FORMATTED] <t>;\n" +
+        "  ANALYZE TABLE <t> COMPUTE STATISTICS;\n" +
+        "\n  SET:\n" +
+        "  SET hive.exec.dynamic.partition=true;\n" +
+        "  SET hive.exec.dynamic.partition.mode=nonstrict;\n" +
+        "  SET hive.enforce.bucketing=true;\n" +
+        "  SET hive.execution.engine=mr;\n" +
+        "  SET mapreduce.job.name=<nombre>;",
+        "help"
+      )];
+    }
+    if (trimmed.startsWith("!set ")) {
+      const setVal = trimmed.slice(5).trim();
+      if (setVal.startsWith("outputformat")) return [out(`outputformat set to ${setVal.split(/\s+/)[1] || "table"}`, "system")];
+      if (setVal.startsWith("verbose")) return [out(`verbose set to ${setVal.split(/\s+/)[1] || "true"}`, "system")];
+      return [out(`${setVal} set`, "system")];
+    }
+    if (trimmed.startsWith("!columns ") || trimmed.startsWith("!describe ")) {
+      const tName = trimmed.split(/\s+/)[1];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const cols = db.tables[tName].columns;
+      return [out(renderTable(["TABLE_NAME", "COLUMN_NAME", "DATA_TYPE"], cols.map(c => [tName, c.name, c.type.toUpperCase()])))];
+    }
     if (trimmed === "!tables") {
       const db = hiveDBs[currentHiveDB]; if (!db) return [out("(ninguna tabla)")];
       const tables = Object.keys(db.tables);
-      if (tables.length === 0) return [out("+-----------+\n| tab_name  |\n+-----------+\n+-----------+\n0 rows selected")];
-      const maxW = Math.max(8, ...tables.map(t => t.length));
-      const sep = "+" + "-".repeat(maxW + 2) + "+";
-      return [out(`${sep}\n| ${"tab_name".padEnd(maxW)} |\n${sep}\n${tables.map(t => `| ${t.padEnd(maxW)} |`).join("\n")}\n${sep}\n${tables.length} rows selected`)];
+      return [out(renderTable(["tab_name"], tables.map(t => [t])))];
     }
-    if (trimmed === "help") return [out("Beeline commands:\n  !connect jdbc:hive2://hadoop-virtualbox:10000\n  !tables                    — listar tablas\n  !exit                      — salir de Beeline\n  show databases;            — bases de datos\n  show tables;               — tablas en BD actual\n  use <db>;                  — cambiar BD\n  create database <db>;      — crear BD\n  create table <t> (col tipo, ...);  — crear tabla\n  insert into <t> values (...);      — insertar datos\n  select ... from <t>;               — consultar\n  describe <t>;              — ver esquema\n  drop table <t>;            — eliminar tabla\n  drop database <db> [cascade];", "help")];
-    // HiveQL
-    if (lower === "show databases") {
+    if (!beelineConnected) return [out("Error: Not connected. Use:\n  !connect jdbc:hive2://hadoop-virtualbox:10000", "error")];
+
+    // ══════════════════════════════
+    // SET commands
+    // ══════════════════════════════
+    if (lower.startsWith("set ")) {
+      const setPart = trimmed.slice(4).trim();
+      const kv = setPart.split("=");
+      const key = kv[0].trim();
+      const val = (kv[1] || "").trim();
+      const knownSets = [
+        "hive.exec.dynamic.partition", "hive.exec.dynamic.partition.mode",
+        "hive.enforce.bucketing", "hive.exec.mode.local.auto",
+        "hive.auto.convert.join", "hive.execution.engine",
+        "mapreduce.job.name", "hive.mapred.mode",
+      ];
+      if (knownSets.some(k => key.toLowerCase().startsWith(k.toLowerCase()))) {
+        return [out(`${key}=${val}`, "system")];
+      }
+      return [out(`${key}=${val}`, "system")];
+    }
+
+    // ══════════════════════════════
+    // SHOW commands
+    // ══════════════════════════════
+    if (lower === "show databases" || lower === "show schemas") {
       const dbs = Object.keys(hiveDBs);
-      const maxW = Math.max(13, ...dbs.map(d => d.length));
-      const sep = "+" + "-".repeat(maxW + 2) + "+";
-      return [out(`INFO  : Compiling command: show databases\nINFO  : Completed compiling command\nINFO  : Executing command: show databases\n${sep}\n| ${"database_name".padEnd(maxW)} |\n${sep}\n${dbs.map(d => `| ${d.padEnd(maxW)} |`).join("\n")}\n${sep}\n${dbs.length} rows selected`)];
+      return [out(`INFO  : Compiling command: show databases\nINFO  : Completed compiling command\nINFO  : Executing command: show databases\n` + renderTable(["database_name"], dbs.map(d => [d])))];
     }
-    if (lower.startsWith("select current_database()")) return [out(`+-------------------+\n| current_database  |\n+-------------------+\n| ${currentHiveDB.padEnd(17)} |\n+-------------------+`)];
-    if (lower.startsWith("create database ")) {
-      const dbName = trimmed.split(/\s+/)[2];
-      if (hiveDBs[dbName]) return [out(`FAILED: Database ${dbName} already exists`, "error")];
+    if (lower === "show tables") {
+      const db = hiveDBs[currentHiveDB]; if (!db) return [out("(ninguna tabla)")];
+      const tables = Object.keys(db.tables);
+      return [out(renderTable(["tab_name"], tables.map(t => [t])))];
+    }
+    if (lower.startsWith("show tables in ")) {
+      const dbName = trimmed.split(/\s+/)[3];
+      const db = hiveDBs[dbName];
+      if (!db) return [out(`FAILED: Database ${dbName} does not exist`, "error")];
+      return [out(renderTable(["tab_name"], Object.keys(db.tables).map(t => [t])))];
+    }
+    if (lower.startsWith("show partitions ")) {
+      const tName = trimmed.split(/\s+/)[2];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const partitions = db.tables[tName].partitions || [];
+      if (partitions.length === 0) return [out(`+---------------------+\n| partition           |\n+---------------------+\n+---------------------+\n0 rows selected`)];
+      return [out(renderTable(["partition"], partitions.map(p => [p])))];
+    }
+    if (lower.startsWith("show create table ")) {
+      const tName = trimmed.split(/\s+/)[3];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const t = db.tables[tName];
+      const cols = t.columns.map(c => `  ${c.name} ${c.type.toUpperCase()}`).join(",\n");
+      const isExt = t.external ? "EXTERNAL " : "";
+      const loc = t.location ? `\nLOCATION '${t.location}'` : `\nLOCATION '/user/hive/warehouse/${currentHiveDB === "default" ? "" : currentHiveDB + ".db/"}${tName}'`;
+      const rowFmt = t.rowFormat ? `\nROW FORMAT ${t.rowFormat}` : "\nROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'";
+      const storedAs = t.storedAs ? `\nSTORED AS ${t.storedAs}` : "\nSTORED AS TEXTFILE";
+      const partBy = t.partitionedBy ? `\nPARTITIONED BY (${t.partitionedBy.map(p => `${p.name} ${p.type}`).join(", ")})` : "";
+      const clustBy = t.clusteredBy ? `\nCLUSTERED BY (${t.clusteredBy.col}) INTO ${t.clusteredBy.buckets} BUCKETS` : "";
+      const tblProp = t.tblproperties ? `\nTBLPROPERTIES (${Object.entries(t.tblproperties).map(([k, v]) => `"${k}"="${v}"`).join(", ")})` : "";
+      const ddl = `CREATE ${isExt}TABLE \`${tName}\` (\n${cols}\n)${rowFmt}${storedAs}${partBy}${clustBy}${loc}${tblProp}`;
+      return [out(renderTable(["createtab_stmt"], [[ddl]]))];
+    }
+
+    // ══════════════════════════════
+    // SELECT CURRENT_DATABASE()
+    // ══════════════════════════════
+    if (lower.startsWith("select current_database()")) {
+      return [out(renderTable(["current_database()"], [[currentHiveDB]]))];
+    }
+
+    // ══════════════════════════════
+    // DATABASE commands
+    // ══════════════════════════════
+    if (lower.startsWith("create database ") || lower.startsWith("create schema ")) {
+      const parts = trimmed.split(/\s+/);
+      const ifNotExists = lower.includes("if not exists");
+      const dbName = ifNotExists ? parts[5] : parts[2];
+      if (!dbName) return [out("Error: Falta nombre de base de datos", "error")];
+      if (hiveDBs[dbName]) {
+        if (ifNotExists) return [out(`No rows affected`)];
+        return [out(`FAILED: Database ${dbName} already exists`, "error")];
+      }
       setHiveDBs(prev => ({ ...prev, [dbName]: { tables: {} } }));
-      // Also create in HDFS
       const whPath = `/user/hive/warehouse/${dbName}.db`;
-      setHdfsFS(prev => { let nf = ensureHdfsDir(whPath, { ...prev }); return nf; });
-      return [out(`INFO  : Compiling command: create database ${dbName}\nINFO  : Executing command\nNo rows affected\n\n✓ Base de datos '${dbName}' creada. En HDFS: /user/hive/warehouse/${dbName}.db`, "success")];
+      setHdfsFS(prev => ensureHdfsDir(whPath, { ...prev }));
+      return [out(`INFO  : Compiling command: create database ${dbName}\nINFO  : Executing command\nNo rows affected\n\n✓ Base de datos '${dbName}' creada.\n  HDFS: ${whPath}`, "success")];
     }
-    if (lower.startsWith("drop database ")) {
-      const parts = trimmed.split(/\s+/); const dbName = parts[2]; const cascade = lower.includes("cascade");
-      if (!hiveDBs[dbName]) return [out(`FAILED: Database ${dbName} does not exist`, "error")];
+    if (lower.startsWith("drop database ") || lower.startsWith("drop schema ")) {
+      const parts = trimmed.split(/\s+/);
+      const ifExists = lower.includes("if exists");
+      const dbName = ifExists ? parts[4] : parts[2];
+      const cascade = lower.includes("cascade");
+      if (!hiveDBs[dbName]) {
+        if (ifExists) return [out("No rows affected")];
+        return [out(`FAILED: Database ${dbName} does not exist`, "error")];
+      }
       if (dbName === "default") return [out("FAILED: Cannot drop default database", "error")];
       if (!cascade && Object.keys(hiveDBs[dbName].tables).length > 0) return [out(`FAILED: Database ${dbName} is not empty. Use CASCADE.`, "error")];
       setHiveDBs(prev => { const n = { ...prev }; delete n[dbName]; return n; });
@@ -1411,99 +1600,577 @@ export default function HadoopVMSimulator() {
       setCurrentHiveDB(dbName);
       return [out(`No rows affected`)];
     }
-    if (lower === "show tables") {
-      const db = hiveDBs[currentHiveDB]; if (!db) return [out("(ninguna tabla)")];
-      const tables = Object.keys(db.tables);
-      if (tables.length === 0) return [out("+-----------+\n| tab_name  |\n+-----------+\n+-----------+\n0 rows selected")];
-      const maxW = Math.max(8, ...tables.map(t => t.length));
-      const sep = "+" + "-".repeat(maxW + 2) + "+";
-      return [out(`${sep}\n| ${"tab_name".padEnd(maxW)} |\n${sep}\n${tables.map(t => `| ${t.padEnd(maxW)} |`).join("\n")}\n${sep}\n${tables.length} rows selected`)];
-    }
-    if (lower.startsWith("create table ")) {
-      const m = trimmed.match(/create\s+table\s+(?:if\s+not\s+exists\s+)?(\w+)\s*\((.+)\)/i);
-      if (!m) return [out("Error: Syntax error in CREATE TABLE", "error")];
-      const tName = m[1]; const colDefs = m[2].split(",").map(c => { const p = c.trim().split(/\s+/); return { name: p[0], type: p[1] || "STRING" }; });
+
+    // ══════════════════════════════
+    // CREATE TABLE (full parser)
+    // ══════════════════════════════
+    if (lower.startsWith("create ")) {
+      const isExternal = /create\s+external\s+table/i.test(trimmed);
+      const createRx = /create\s+(?:external\s+)?table\s+(?:if\s+not\s+exists\s+)?(\w+)\s*(?:\(([^)]*)\))?(.*)/is;
+      const cm = trimmed.match(createRx);
+      if (!cm) return [out("Error: Syntax error in CREATE TABLE", "error")];
+      const tName = cm[1];
+      const colStr = cm[2] || "";
+      const rest = cm[3] || "";
+      const restL = rest.toLowerCase();
+
+      const ifNotExists = /if\s+not\s+exists/i.test(trimmed);
+      if (ifNotExists && hiveDBs[currentHiveDB]?.tables[tName]) return [out("No rows affected")];
+      if (!ifNotExists && hiveDBs[currentHiveDB]?.tables[tName]) return [out(`FAILED: Table ${tName} already exists`, "error")];
+
+      // Parse columns (skip if CREATE TABLE AS SELECT)
+      const colDefs = colStr ? colStr.split(",").map(c => {
+        const p = c.trim().split(/\s+/);
+        return { name: p[0], type: (p[1] || "STRING").replace(/[()]/g, "") };
+      }).filter(c => c.name) : [];
+
+      // ROW FORMAT
+      let rowFormat = null;
+      const rfDelim = rest.match(/ROW\s+FORMAT\s+DELIMITED\s+FIELDS\s+TERMINATED\s+BY\s+['"](.*?)['"]/i);
+      const rfSerde = rest.match(/ROW\s+FORMAT\s+SERDE\s+['"]([^'"]+)['"]/i);
+      if (rfDelim) rowFormat = `DELIMITED FIELDS TERMINATED BY '${rfDelim[1]}'`;
+      else if (rfSerde) {
+        const serdeProps = rest.match(/WITH\s+SERDEPROPERTIES\s*\(([^)]+)\)/i);
+        rowFormat = `SERDE '${rfSerde[1]}'${serdeProps ? " WITH SERDEPROPERTIES (" + serdeProps[1] + ")" : ""}`;
+      }
+
+      // STORED AS
+      const storedM = rest.match(/STORED\s+AS\s+(\w+)/i);
+      const storedAs = storedM ? storedM[1].toUpperCase() : "TEXTFILE";
+
+      // TBLPROPERTIES
+      let tblprops = null;
+      const tblpM = rest.match(/TBLPROPERTIES\s*\(([^)]+)\)/i);
+      if (tblpM) {
+        tblprops = {};
+        tblpM[1].split(",").forEach(kv => {
+          const [k, v] = kv.split("=").map(s => s.trim().replace(/^["']|["']$/g, ""));
+          if (k) tblprops[k] = v;
+        });
+      }
+
+      // PARTITIONED BY
+      let partitionedBy = null;
+      const partM = rest.match(/PARTITIONED\s+BY\s*\(([^)]+)\)/i);
+      if (partM) {
+        partitionedBy = partM[1].split(",").map(p => { const pp = p.trim().split(/\s+/); return { name: pp[0], type: (pp[1] || "STRING").toUpperCase() }; });
+      }
+
+      // CLUSTERED BY
+      let clusteredBy = null;
+      const clustM = rest.match(/CLUSTERED\s+BY\s*\((\w+)\)\s+INTO\s+(\d+)\s+BUCKETS/i);
+      if (clustM) clusteredBy = { col: clustM[1], buckets: parseInt(clustM[2]) };
+
+      // LOCATION
+      let location = null;
+      const locM = rest.match(/LOCATION\s+['"]([^'"]+)['"]/i);
+      if (locM) {
+        location = locM[1];
+        setHdfsFS(prev => ensureHdfsDir(location, { ...prev }));
+      }
+
+      const tableEntry = {
+        columns: colDefs,
+        rows: [],
+        partitions: [],
+        external: isExternal,
+        rowFormat,
+        storedAs,
+        tblproperties: tblprops,
+        partitionedBy,
+        clusteredBy,
+        location,
+      };
+
       setHiveDBs(prev => {
-        const db = { ...prev[currentHiveDB] }; db.tables = { ...db.tables, [tName]: { columns: colDefs, rows: [], partitions: [] } };
+        const db = { ...prev[currentHiveDB] };
+        db.tables = { ...db.tables, [tName]: tableEntry };
         return { ...prev, [currentHiveDB]: db };
       });
-      const whPath = `/user/hive/warehouse/${currentHiveDB === "default" ? "" : currentHiveDB + ".db/"}${tName}`;
-      setHdfsFS(prev => ensureHdfsDir(whPath, { ...prev }));
+      const whPath = location || `/user/hive/warehouse/${currentHiveDB === "default" ? "" : currentHiveDB + ".db/"}${tName}`;
+      if (!location) setHdfsFS(prev => ensureHdfsDir(whPath, { ...prev }));
       setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
-      return [out(`INFO  : Compiling command: create table ${tName}\nINFO  : Starting task [Stage-0:DDL] in serial mode\nINFO  : Completed executing command\nNo rows affected\n\n✓ Tabla '${tName}' creada en ${currentHiveDB}`, "success")];
+
+      const extNote = isExternal ? " EXTERNAL" : "";
+      const storNote = storedAs !== "TEXTFILE" ? ` [STORED AS ${storedAs}]` : "";
+      const partNote = partitionedBy ? ` [PARTITIONED BY (${partitionedBy.map(p => p.name).join(", ")})]` : "";
+      const clustNote = clusteredBy ? ` [CLUSTERED BY (${clusteredBy.col}) INTO ${clusteredBy.buckets} BUCKETS]` : "";
+      const locNote = location ? `\n  LOCATION: ${location}` : `\n  HDFS: ${whPath}`;
+      return [out(`INFO  : Compiling command: create${extNote} table ${tName}\nINFO  : Starting task [Stage-0:DDL] in serial mode\nINFO  : Completed executing command\nNo rows affected\n\n✓ Tabla${extNote} '${tName}' creada en '${currentHiveDB}'${storNote}${partNote}${clustNote}${locNote}`, "success")];
     }
-    if (lower.startsWith("drop table ")) {
-      const tName = trimmed.split(/\s+/)[2];
+
+    // ══════════════════════════════
+    // ALTER TABLE
+    // ══════════════════════════════
+    if (lower.startsWith("alter table ")) {
+      const altM = trimmed.match(/alter\s+table\s+(\w+)\s+(.+)/i);
+      if (!altM) return [out("Error: Syntax error in ALTER TABLE", "error")];
+      const tName = altM[1]; const altOp = altM[2].trim();
       const db = hiveDBs[currentHiveDB];
       if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      // ADD COLUMNS
+      if (/^add\s+columns?\s*\(/i.test(altOp)) {
+        const colM = altOp.match(/add\s+columns?\s*\(([^)]+)\)/i);
+        if (!colM) return [out("Error: Syntax error in ADD COLUMNS", "error")];
+        const newCols = colM[1].split(",").map(c => { const p = c.trim().split(/\s+/); return { name: p[0], type: (p[1] || "STRING").toUpperCase() }; });
+        setHiveDBs(prev => {
+          const d = { ...prev[currentHiveDB] };
+          d.tables = { ...d.tables, [tName]: { ...d.tables[tName], columns: [...d.tables[tName].columns, ...newCols] } };
+          return { ...prev, [currentHiveDB]: d };
+        });
+        return [out(`No rows affected\n✓ Columnas añadidas a '${tName}': ${newCols.map(c => c.name).join(", ")}`, "success")];
+      }
+      // ADD PARTITION
+      if (/^add\s+partition/i.test(altOp)) {
+        const pM = altOp.match(/partition\s*\(([^)]+)\)/i);
+        const partVal = pM ? pM[1] : "unknown";
+        setHiveDBs(prev => {
+          const d = { ...prev[currentHiveDB] };
+          const t = d.tables[tName];
+          d.tables = { ...d.tables, [tName]: { ...t, partitions: [...(t.partitions || []), partVal] } };
+          return { ...prev, [currentHiveDB]: d };
+        });
+        return [out(`No rows affected\n✓ Partición '${partVal}' añadida a '${tName}'`, "success")];
+      }
+      return [out(`No rows affected`)];
+    }
+
+    // ══════════════════════════════
+    // DROP TABLE
+    // ══════════════════════════════
+    if (lower.startsWith("drop table ")) {
+      const parts = trimmed.split(/\s+/);
+      const ifExists = lower.includes("if exists");
+      const tName = ifExists ? parts[4] : parts[2];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) {
+        if (ifExists) return [out("No rows affected")];
+        return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      }
       setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables }; delete d.tables[tName]; return { ...prev, [currentHiveDB]: d }; });
       return [out(`No rows affected\n✓ Tabla '${tName}' eliminada`, "success")];
     }
+
+    // ══════════════════════════════
+    // TRUNCATE TABLE
+    // ══════════════════════════════
     if (lower.startsWith("truncate table ")) {
       const tName = trimmed.split(/\s+/)[2];
-      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
-      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [] } }; return { ...prev, [currentHiveDB]: d }; });
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [], partitions: [] } }; return { ...prev, [currentHiveDB]: d }; });
       return [out(`No rows affected`)];
+    }
+
+    // ══════════════════════════════
+    // DESCRIBE / DESC
+    // ══════════════════════════════
+    if (lower.startsWith("describe formatted ") || lower.startsWith("desc formatted ")) {
+      const tName = trimmed.split(/\s+/)[2];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const t = db.tables[tName];
+      const cols = t.columns;
+      const maxN = Math.max(12, ...cols.map(c => c.name.length));
+      const maxT = Math.max(9, ...cols.map(c => c.type.length));
+      const sep = "+" + "-".repeat(maxN + 2) + "+" + "-".repeat(maxT + 2) + "+" + "-".repeat(12) + "+";
+      let out2 = `${sep}\n| ${"col_name".padEnd(maxN)} | ${"data_type".padEnd(maxT)} | ${"comment".padEnd(10)} |\n${sep}\n`;
+      out2 += cols.map(c => `| ${c.name.padEnd(maxN)} | ${c.type.toUpperCase().padEnd(maxT)} | ${"".padEnd(10)} |`).join("\n");
+      out2 += `\n${sep}\n\n# Detailed Table Information\n`;
+      out2 += `Database:             ${currentHiveDB}\n`;
+      out2 += `Table:                ${tName}\n`;
+      out2 += `Owner:                hadoop\n`;
+      out2 += `Table Type:           ${t.external ? "EXTERNAL_TABLE" : "MANAGED_TABLE"}\n`;
+      out2 += `Location:             ${t.location || `/user/hive/warehouse/${currentHiveDB === "default" ? "" : currentHiveDB + ".db/"}${tName}`}\n`;
+      out2 += `InputFormat:          ${t.storedAs === "ORC" ? "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat" : "org.apache.hadoop.mapred.TextInputFormat"}\n`;
+      out2 += `OutputFormat:         ${t.storedAs === "ORC" ? "org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat" : "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"}\n`;
+      out2 += `Compressed:           ${(t.tblproperties?.["orc.compress"] === "SNAPPY") ? "Yes (SNAPPY)" : "No"}\n`;
+      if (t.partitionedBy) out2 += `Partition Columns:    ${t.partitionedBy.map(p => `${p.name} (${p.type})`).join(", ")}\n`;
+      if (t.clusteredBy) out2 += `Bucketing:            Bucketed by (${t.clusteredBy.col}) into ${t.clusteredBy.buckets} buckets\n`;
+      if (t.rowFormat) out2 += `SerDe:                ${t.rowFormat.includes("OpenCSV") ? "org.apache.hadoop.hive.serde2.OpenCSVSerde" : "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"}\n`;
+      return [out(out2)];
     }
     if (lower.startsWith("describe ") || lower.startsWith("desc ")) {
       const tName = trimmed.split(/\s+/)[1];
-      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
       const cols = db.tables[tName].columns;
-      const maxN = Math.max(8, ...cols.map(c => c.name.length));
-      const maxT = Math.max(4, ...cols.map(c => c.type.length));
-      const sep = "+" + "-".repeat(maxN + 2) + "+" + "-".repeat(maxT + 2) + "+" + "-".repeat(10) + "+";
-      return [out(`${sep}\n| ${"col_name".padEnd(maxN)} | ${"data_type".padEnd(maxT)} | ${"comment".padEnd(8)} |\n${sep}\n${cols.map(c => `| ${c.name.padEnd(maxN)} | ${c.type.toUpperCase().padEnd(maxT)} | ${"".padEnd(8)} |`).join("\n")}\n${sep}\n${cols.length} rows selected`)];
+      return [out(renderTable(["col_name", "data_type", "comment"], cols.map(c => [c.name, c.type.toUpperCase(), ""])))];
     }
-    if (lower.startsWith("insert into ")) {
-      const m = trimmed.match(/insert\s+into\s+(?:table\s+)?(\w+)\s+values\s*(.+)/i);
-      if (!m) return [out("Error: Syntax error in INSERT", "error")];
-      const tName = m[1]; const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
-      const valuesStr = m[2]; const rowMatches = [...valuesStr.matchAll(/\(([^)]+)\)/g)];
-      const newRows = rowMatches.map(rm => rm[1].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")));
-      const aid = appCounter; setAppCounter(c => c + 1);
-      setYarnApps(prev => [...prev, { id: aid, name: `insert_${tName}`, state: "FINISHED" }]);
-      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [...d.tables[tName].rows, ...newRows] } }; return { ...prev, [currentHiveDB]: d }; });
-      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
-      return [out(`INFO  : Compiling command: insert into ${tName}\nINFO  : Starting job: job_1700000000000_${String(aid).padStart(4, "0")}\nINFO  : map 100% reduce 100%\nINFO  : Job completed successfully\nNo rows affected (MapReduce)\n\n✓ ${newRows.length} fila(s) insertada(s) en '${tName}'`, "success")];
+
+    // ══════════════════════════════
+    // ANALYZE TABLE
+    // ══════════════════════════════
+    if (lower.startsWith("analyze table ")) {
+      const tName = trimmed.split(/\s+/)[2];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      const rowCount = db.tables[tName].rows.length;
+      return [out(`INFO  : Table ${currentHiveDB}.${tName} stats: [numFiles=1, numRows=${rowCount}, totalSize=${rowCount * 50}, rawDataSize=${rowCount * 48}]\nNo rows affected\n✓ Statistics computed for '${tName}'`, "success")];
     }
-    if (lower.startsWith("select ")) {
-      const m = trimmed.match(/select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?(?:\s+(?:order|group)\s+by\s+(.+?))?(?:\s+limit\s+(\d+))?$/i);
-      if (!m) return [out("Error: Syntax error in SELECT", "error")];
-      const selCols = m[1]; const tName = m[2]; const whereClause = m[3]; const limitN = m[5] ? parseInt(m[5]) : null;
-      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
-      const tbl = db.tables[tName]; const colNames = tbl.columns.map(c => c.name);
-      let selectedCols = selCols.trim() === "*" ? colNames : selCols.split(",").map(c => c.trim());
-      let rows = [...tbl.rows];
-      if (whereClause) { try { const wm = whereClause.match(/(\w+)\s*(=|!=|>|<|>=|<=)\s*['"]*([^'"]*)['"]*$/); if (wm) { const ci = colNames.indexOf(wm[1]); const op = wm[2]; const val = wm[3]; if (ci >= 0) rows = rows.filter(r => { const rv = r[ci]; if (op === "=") return rv == val; if (op === "!=") return rv != val; if (op === ">") return parseFloat(rv) > parseFloat(val); if (op === "<") return parseFloat(rv) < parseFloat(val); return true; }); } } catch {} }
-      if (limitN) rows = rows.slice(0, limitN);
-      const colIdxs = selectedCols.map(c => { if (c.startsWith("count(")) return -2; if (c.startsWith("sum(")) return -3; return colNames.indexOf(c); });
-      // Handle aggregates
-      if (colIdxs.some(i => i === -2 || i === -3)) {
-        const aggResults = colIdxs.map((ci, i) => { if (ci === -2) return String(rows.length); if (ci === -3) { const inner = selectedCols[i].match(/sum\((\w+)\)/i); const si = inner ? colNames.indexOf(inner[1]) : -1; return si >= 0 ? String(rows.reduce((s, r) => s + (parseFloat(r[si]) || 0), 0)) : "0"; } return rows[0]?.[ci] || ""; });
-        const maxWs = selectedCols.map((c, i) => Math.max(c.length, aggResults[i].length));
-        const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
-        return [out(`${sep}\n| ${selectedCols.map((c, i) => c.padEnd(maxWs[i])).join(" | ")} |\n${sep}\n| ${aggResults.map((v, i) => v.padEnd(maxWs[i])).join(" | ")} |\n${sep}\n1 row selected`)];
+
+    // ══════════════════════════════
+    // INSERT
+    // ══════════════════════════════
+    if (lower.startsWith("insert ")) {
+      // INSERT OVERWRITE LOCAL DIRECTORY
+      const ildM = trimmed.match(/insert\s+overwrite\s+local\s+directory\s+['"](.*?)['"]\s+(?:row\s+format\s+delimited\s+(?:fields\s+terminated\s+by\s+['"](.*?)['"])\s+)?select\s+(.*?)\s+from\s+(\w+)(.*)/is);
+      if (ildM) {
+        const dirPath = ildM[1]; const sep2 = ildM[2] || ","; const selPart = ildM[3]; const tName = ildM[4]; const rest2 = ildM[5] || "";
+        const db = hiveDBs[currentHiveDB];
+        if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+        const tbl = db.tables[tName]; const colNames = tbl.columns.map(c => c.name);
+        const selectedCols = selPart.trim() === "*" ? colNames : selPart.split(",").map(c => c.trim());
+        const rows = tbl.rows;
+        const content = rows.map(r => selectedCols.map(c => { const ci = colNames.indexOf(c); return ci >= 0 ? (r[ci] ?? "") : ""; }).join(sep2)).join("\n");
+        const resolvedDir = resolvePath(dirPath, cwd);
+        setLocalFS(prev => { const nf = ensureLocalDir(resolvedDir, { ...prev }); const parts2 = resolvedDir.split("/"); const fname = "000000_0"; nf[resolvedDir] = { ...nf[resolvedDir], files: { ...(nf[resolvedDir]?.files || {}), [fname]: content } }; return nf; });
+        const aid = appCounter; setAppCounter(c => c + 1);
+        setYarnApps(prev => [...prev, { id: aid, name: `export_${tName}`, state: "FINISHED" }]);
+        return [out(`INFO  : Starting job = job_1700000000000_${String(aid).padStart(4, "0")}\n${mrLog("export", aid)}\nNo rows affected\n\n✓ ${rows.length} filas exportadas a directorio local '${dirPath}'`, "success")];
       }
-      const maxWs = selectedCols.map((c, i) => Math.max(c.length, ...rows.map(r => String(r[colIdxs[i]] || "NULL").length)));
-      const sep = "+" + maxWs.map(w => "-".repeat(w + 2)).join("+") + "+";
-      const hdr = "| " + selectedCols.map((c, i) => c.padEnd(maxWs[i])).join(" | ") + " |";
-      const bodyRows = rows.map(r => "| " + colIdxs.map((ci, i) => String(ci >= 0 ? (r[ci] ?? "NULL") : "NULL").padEnd(maxWs[i])).join(" | ") + " |");
-      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
-      return [out(`${sep}\n${hdr}\n${sep}\n${bodyRows.join("\n")}\n${sep}\n${rows.length} rows selected`)];
+
+      // INSERT OVERWRITE TABLE ... SELECT
+      const insOvM = trimmed.match(/insert\s+overwrite\s+table\s+(\w+)\s+(?:partition\s*\(([^)]*)\)\s+)?select\s+(.*?)\s+from\s+(\w+)(.*)/is);
+      if (insOvM) {
+        const destTable = insOvM[1]; const partSpec = insOvM[2]; const selPart = insOvM[3]; const srcTable = insOvM[4]; const rest2 = insOvM[5] || "";
+        const db = hiveDBs[currentHiveDB];
+        if (!db?.tables[destTable]) return [out(`FAILED: Table ${destTable} does not exist`, "error")];
+        if (!db?.tables[srcTable]) return [out(`FAILED: Table ${srcTable} does not exist`, "error")];
+        const srcTbl = db.tables[srcTable]; const srcCols = srcTbl.columns.map(c => c.name);
+        const dstCols = db.tables[destTable].columns.map(c => c.name);
+        const selectedCols = selPart.trim() === "*" ? srcCols : selPart.split(",").map(c => c.trim().split(/\s+as\s+/i)[0].trim());
+        // WHERE parsing from rest
+        const whereM2 = rest2.match(/where\s+(.+?)(?:\s+group\s+by|\s+order\s+by|\s+limit|$)/is);
+        let srcRows = [...srcTbl.rows];
+        if (whereM2) srcRows = applyWhere(srcRows, srcCols, whereM2[1].trim());
+        const mappedRows = srcRows.map(r => selectedCols.map(c => { const ci = srcCols.indexOf(c); return ci >= 0 ? (r[ci] ?? "") : ""; }));
+        const aid = appCounter; setAppCounter(c => c + 1);
+        setYarnApps(prev => [...prev, { id: aid, name: `insert_overwrite_${destTable}`, state: "FINISHED" }]);
+        if (partSpec) {
+          const pv = partSpec.split("=").map(s => s.trim().replace(/['"]/g, "")).join("=");
+          setHiveDBs(prev => {
+            const d = { ...prev[currentHiveDB] };
+            const t = d.tables[destTable];
+            d.tables = { ...d.tables, [destTable]: { ...t, rows: mappedRows, partitions: [...new Set([...(t.partitions || []), pv])] } };
+            return { ...prev, [currentHiveDB]: d };
+          });
+        } else {
+          setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [destTable]: { ...d.tables[destTable], rows: mappedRows } }; return { ...prev, [currentHiveDB]: d }; });
+        }
+        setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+        return [out(`${mrLog("insert_overwrite", aid)}\nNo rows affected\n\n✓ ${mappedRows.length} fila(s) escritas en '${destTable}'${partSpec ? " [partición: " + partSpec + "]" : ""}`, "success")];
+      }
+
+      // INSERT INTO TABLE ... PARTITION (...) SELECT
+      const insPartSelM = trimmed.match(/insert\s+into\s+(?:table\s+)?(\w+)\s+partition\s*\(([^)]*)\)\s+select\s+(.*?)\s+from\s+(\w+)(.*)/is);
+      if (insPartSelM) {
+        const destTable = insPartSelM[1]; const partSpec = insPartSelM[2]; const selPart = insPartSelM[3]; const srcTable = insPartSelM[4]; const rest2 = insPartSelM[5] || "";
+        const db = hiveDBs[currentHiveDB];
+        if (!db?.tables[destTable]) return [out(`FAILED: Table ${destTable} does not exist`, "error")];
+        if (!db?.tables[srcTable]) return [out(`FAILED: Table ${srcTable} does not exist`, "error")];
+        const srcTbl = db.tables[srcTable]; const srcCols = srcTbl.columns.map(c => c.name);
+        const selectedCols = selPart.trim() === "*" ? srcCols : selPart.split(",").map(c => c.trim().split(/\s+as\s+/i)[0].trim());
+        const whereM2 = rest2.match(/where\s+(.+?)(?:\s+group\s+by|\s+order\s+by|\s+limit|$)/is);
+        let srcRows = [...srcTbl.rows];
+        if (whereM2) srcRows = applyWhere(srcRows, srcCols, whereM2[1].trim());
+        const mappedRows = srcRows.map(r => selectedCols.map(c => { const ci = srcCols.indexOf(c); return ci >= 0 ? (r[ci] ?? "") : ""; }));
+        const aid = appCounter; setAppCounter(c => c + 1);
+        setYarnApps(prev => [...prev, { id: aid, name: `insert_${destTable}`, state: "FINISHED" }]);
+        const pv = partSpec.split("=").map(s => s.trim().replace(/['"]/g, "")).join("=");
+        setHiveDBs(prev => {
+          const d = { ...prev[currentHiveDB] };
+          const t = d.tables[destTable];
+          d.tables = { ...d.tables, [destTable]: { ...t, rows: [...(t.rows || []), ...mappedRows], partitions: [...new Set([...(t.partitions || []), pv])] } };
+          return { ...prev, [currentHiveDB]: d };
+        });
+        setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+        return [out(`${mrLog("insert_partition", aid)}\nNo rows affected\n\n✓ ${mappedRows.length} fila(s) insertadas en '${destTable}' [partición: ${partSpec}]`, "success")];
+      }
+
+      // INSERT INTO ... VALUES
+      const insValM = trimmed.match(/insert\s+into\s+(?:table\s+)?(\w+)\s+values\s*(.+)/i);
+      if (insValM) {
+        const tName = insValM[1]; const db = hiveDBs[currentHiveDB];
+        if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+        const valuesStr = insValM[2];
+        const rowMatches = [...valuesStr.matchAll(/\(([^)]+)\)/g)];
+        const newRows = rowMatches.map(rm => rm[1].split(",").map(v => v.trim().replace(/^['"]|['"]$/g, "")));
+        const aid = appCounter; setAppCounter(c => c + 1);
+        setYarnApps(prev => [...prev, { id: aid, name: `insert_${tName}`, state: "FINISHED" }]);
+        setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [...d.tables[tName].rows, ...newRows] } }; return { ...prev, [currentHiveDB]: d }; });
+        setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+        return [out(`INFO  : Starting job = job_1700000000000_${String(aid).padStart(4, "0")}\nINFO  : map 100%  reduce 100%\nNo rows affected\n\n✓ ${newRows.length} fila(s) insertada(s) en '${tName}'`, "success")];
+      }
+
+      // INSERT INTO TABLE ... SELECT (without PARTITION)
+      const insSelM = trimmed.match(/insert\s+into\s+(?:table\s+)?(\w+)\s+select\s+(.*?)\s+from\s+(\w+)(.*)/is);
+      if (insSelM) {
+        const destTable = insSelM[1]; const selPart = insSelM[2]; const srcTable = insSelM[3]; const rest2 = insSelM[4] || "";
+        const db = hiveDBs[currentHiveDB];
+        if (!db?.tables[destTable]) return [out(`FAILED: Table ${destTable} does not exist`, "error")];
+        if (!db?.tables[srcTable]) return [out(`FAILED: Table ${srcTable} does not exist`, "error")];
+        const srcTbl = db.tables[srcTable]; const srcCols = srcTbl.columns.map(c => c.name);
+        const selectedCols = selPart.trim() === "*" ? srcCols : selPart.split(",").map(c => c.trim().split(/\s+as\s+/i)[0].trim());
+        const whereM2 = rest2.match(/where\s+(.+?)(?:\s+group\s+by|\s+order\s+by|\s+limit|$)/is);
+        let srcRows = [...srcTbl.rows];
+        if (whereM2) srcRows = applyWhere(srcRows, srcCols, whereM2[1].trim());
+        const mappedRows = srcRows.map(r => selectedCols.map(c => { const ci = srcCols.indexOf(c); return ci >= 0 ? (r[ci] ?? "") : ""; }));
+        const aid = appCounter; setAppCounter(c => c + 1);
+        setYarnApps(prev => [...prev, { id: aid, name: `insert_${destTable}`, state: "FINISHED" }]);
+        setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [destTable]: { ...d.tables[destTable], rows: [...d.tables[destTable].rows, ...mappedRows] } }; return { ...prev, [currentHiveDB]: d }; });
+        setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+        return [out(`${mrLog("insert_select", aid)}\nNo rows affected\n\n✓ ${mappedRows.length} fila(s) insertadas en '${destTable}'`, "success")];
+      }
+
+      return [out("Error: Syntax error in INSERT", "error")];
     }
+
+    // ══════════════════════════════
+    // LOAD DATA
+    // ══════════════════════════════
     if (lower.startsWith("load data")) {
-      const m = trimmed.match(/load\s+data\s+(?:local\s+)?inpath\s+['"](.*?)['"]\s+(?:overwrite\s+)?into\s+table\s+(\w+)/i);
-      if (!m) return [out("Error: Syntax error in LOAD DATA", "error")];
-      const filePath = m[1]; const tName = m[2];
-      const db = hiveDBs[currentHiveDB]; if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
-      const nd = getLocalNode(resolvePath(filePath, cwd));
-      if (!nd || nd.type !== "file") return [out(`FAILED: File not found: ${filePath}`, "error")];
-      const fileRows = (nd.content || "").split("\n").filter(l => l.trim()).map(l => l.split(/[,\t]/));
-      setHiveDBs(prev => { const d = { ...prev[currentHiveDB] }; d.tables = { ...d.tables, [tName]: { ...d.tables[tName], rows: [...d.tables[tName].rows, ...fileRows] } }; return { ...prev, [currentHiveDB]: d }; });
-      return [out(`Loading data to table ${tName}\n✓ ${fileRows.length} filas cargadas`, "success")];
+      const isLocal = /load\s+data\s+local/i.test(trimmed);
+      const isOverwrite = /overwrite/i.test(trimmed);
+      const ldM = trimmed.match(/load\s+data\s+(?:local\s+)?inpath\s+['"](.*?)['"]\s+(?:overwrite\s+)?into\s+table\s+(\w+)(?:\s+partition\s*\(([^)]*)\))?/i);
+      if (!ldM) return [out("Error: Syntax error in LOAD DATA", "error")];
+      const filePath = ldM[1]; const tName = ldM[2]; const partSpec = ldM[3];
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName]) return [out(`FAILED: Table ${tName} does not exist`, "error")];
+      let nd = null;
+      let fileRows = [];
+      if (isLocal) {
+        nd = getLocalNode(resolvePath(filePath, cwd));
+        if (!nd || nd.type !== "file") return [out(`FAILED: File not found (local): ${filePath}`, "error")];
+        const delim = db.tables[tName].rowFormat?.match(/TERMINATED BY ['"](.*?)['"]/)?.[1] || ",";
+        fileRows = (nd.content || "").split("\n").filter(l => l.trim()).map(l => l.split(new RegExp(delim === "\t" ? "\t" : delim)));
+      } else {
+        // HDFS path
+        const absPath = filePath.startsWith("/") ? filePath : `/user/hadoop/${filePath}`;
+        const hNode = hdfsFS[absPath];
+        if (!hNode) return [out(`FAILED: File not found in HDFS: ${filePath}`, "error")];
+        const delim = db.tables[tName].rowFormat?.match(/TERMINATED BY ['"](.*?)['"]/)?.[1] || ",";
+        fileRows = (hNode.content || "").split("\n").filter(l => l.trim()).map(l => l.split(new RegExp(delim === "\t" ? "\t" : delim)));
+      }
+      setHiveDBs(prev => {
+        const d = { ...prev[currentHiveDB] };
+        const t = d.tables[tName];
+        const newRows = isOverwrite ? fileRows : [...(t.rows || []), ...fileRows];
+        const newParts = partSpec ? [...new Set([...(t.partitions || []), partSpec.split("=").map(s => s.trim().replace(/['"]/g, "")).join("=")])] : t.partitions;
+        d.tables = { ...d.tables, [tName]: { ...t, rows: newRows, partitions: newParts } };
+        return { ...prev, [currentHiveDB]: d };
+      });
+      return [out(`Loading data to table ${tName}${partSpec ? " partition(" + partSpec + ")" : ""}\n${isOverwrite ? "Overwriting" : "Appending"} ${fileRows.length} row(s)\n✓ ${fileRows.length} filas cargadas desde ${isLocal ? "local" : "HDFS"}: ${filePath}`, "success")];
     }
-    return [out(`Error: Comando no reconocido. Escribe 'help' para ver comandos.\n\nRecuerda:\n  - Comandos HiveQL terminan en ;\n  - Comandos beeline empiezan con !`, "error")];
-  }, [beelineConnected, hiveDBs, currentHiveDB, out, appCounter, cwd, getLocalNode, resolvePath, ensureHdfsDir]);
+
+    // ══════════════════════════════
+    // SELECT (full)
+    // ══════════════════════════════
+    if (lower.startsWith("select ")) {
+      // JOIN detection
+      const joinM = trimmed.match(/select\s+(.+?)\s+from\s+(\w+)\s+(?:(\w+)\s+)?(?:(?:inner\s+|left\s+(?:outer\s+)?|right\s+(?:outer\s+)?|full\s+(?:outer\s+)?)?join\s+(\w+)\s+(?:(\w+)\s+)?on\s+(.+?))?(?:\s+where\s+(.+?))?(?:\s+group\s+by\s+(.+?))?(?:\s+having\s+(.+?))?(?:\s+order\s+by\s+(.+?))?(?:\s+limit\s+(\d+))?$/is);
+
+      if (!joinM) return [out("Error: Syntax error in SELECT", "error")];
+
+      const selPart = joinM[1].trim();
+      const tName1 = joinM[2];
+      const alias1 = joinM[3] || tName1;
+      const tName2 = joinM[4] || null;
+      const alias2 = joinM[5] || tName2;
+      const joinOnClause = joinM[6] || null;
+      const whereClause = joinM[7] || null;
+      const groupByClause = joinM[8] || null;
+      const havingClause = joinM[9] || null;
+      const orderByClause = joinM[10] || null;
+      const limitN = joinM[11] ? parseInt(joinM[11]) : null;
+
+      const db = hiveDBs[currentHiveDB];
+      if (!db?.tables[tName1]) return [out(`FAILED: Table ${tName1} does not exist`, "error")];
+      const tbl1 = db.tables[tName1];
+      const cols1 = tbl1.columns.map(c => c.name);
+
+      let workRows = [];
+      let workCols = [];
+
+      if (tName2) {
+        // JOIN
+        if (!db?.tables[tName2]) return [out(`FAILED: Table ${tName2} does not exist`, "error")];
+        const tbl2 = db.tables[tName2];
+        const cols2 = tbl2.columns.map(c => c.name);
+        workCols = [...cols1.map(c => `${alias1}.${c}`), ...cols2.map(c => `${alias2}.${c}`)];
+        for (const r1 of tbl1.rows) {
+          for (const r2 of tbl2.rows) {
+            workRows.push([...r1, ...r2]);
+          }
+        }
+        // Apply JOIN ON filter
+        if (joinOnClause) {
+          const onM = joinOnClause.match(/(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)/i);
+          if (onM) {
+            const left = `${onM[1]}.${onM[2]}`; const right = `${onM[3]}.${onM[4]}`;
+            const li = workCols.indexOf(left); const ri = workCols.indexOf(right);
+            if (li >= 0 && ri >= 0) workRows = workRows.filter(r => String(r[li]) === String(r[ri]));
+          }
+        }
+      } else {
+        workCols = cols1.map(c => c);
+        workRows = [...tbl1.rows];
+      }
+
+      // WHERE
+      if (whereClause) workRows = applyWhere(workRows, workCols, whereClause.trim());
+
+      // TABLESAMPLE(BUCKET n OUT OF m ON col)
+      const tsM = selPart.match(/TABLESAMPLE\s*\(\s*BUCKET\s+(\d+)\s+OUT\s+OF\s+(\d+)\s+ON\s+(\w+)\s*\)/i) ||
+                  trimmed.match(/TABLESAMPLE\s*\(\s*BUCKET\s+(\d+)\s+OUT\s+OF\s+(\d+)\s+ON\s+(\w+)\s*\)/i);
+      if (tsM) {
+        const bn = parseInt(tsM[1]); const bTotal = parseInt(tsM[2]);
+        workRows = workRows.filter((_, i) => (i % bTotal) === (bn - 1));
+      }
+
+      // Resolve column expressions (including alias.col form)
+      const resolveColIdx = (expr) => {
+        const cleanExpr = expr.trim().toLowerCase();
+        // alias.col form
+        const dotM = cleanExpr.match(/^(\w+)\.(\w+)$/);
+        if (dotM) {
+          const full = `${dotM[1]}.${dotM[2]}`;
+          const idx = workCols.findIndex(c => c.toLowerCase() === full);
+          if (idx >= 0) return idx;
+          // try just colname
+          return workCols.findIndex(c => c.toLowerCase().endsWith("." + dotM[2]) || c.toLowerCase() === dotM[2]);
+        }
+        return workCols.findIndex(c => c.toLowerCase() === cleanExpr || c.toLowerCase().endsWith("." + cleanExpr));
+      };
+
+      // Parse selected columns & detect aggregates
+      const parseSelCols = (part) => {
+        if (part.trim() === "*") return workCols.map((c, i) => ({ expr: c, label: c, idx: i, agg: null }));
+        // split by comma respecting parens
+        const parts2 = []; let depth2 = 0; let cur = "";
+        for (const ch of part) { if (ch === "(" ) depth2++; else if (ch === ")") depth2--; if (ch === "," && depth2 === 0) { parts2.push(cur.trim()); cur = ""; } else cur += ch; }
+        if (cur.trim()) parts2.push(cur.trim());
+        return parts2.map(p => {
+          const asM = p.match(/^(.*?)\s+AS\s+(\w+)$/i);
+          const expr = asM ? asM[1].trim() : p.trim();
+          const label = asM ? asM[2] : (expr.includes("(") ? expr : p.trim());
+          const lExpr = expr.toLowerCase();
+          if (lExpr.startsWith("count(distinct ")) { const inner = expr.match(/count\(distinct\s+(\w+)\)/i); return { expr, label, idx: -1, agg: "countdistinct", col: inner?.[1] }; }
+          if (lExpr.startsWith("count(")) return { expr, label, idx: -1, agg: "count" };
+          if (lExpr.startsWith("sum(")) { const inner = expr.match(/sum\((\w+)\)/i); return { expr, label, idx: -1, agg: "sum", col: inner?.[1] }; }
+          if (lExpr.startsWith("avg(")) { const inner = expr.match(/avg\((\w+)\)/i); return { expr, label, idx: -1, agg: "avg", col: inner?.[1] }; }
+          if (lExpr.startsWith("max(")) { const inner = expr.match(/max\((\w+)\)/i); return { expr, label, idx: -1, agg: "max", col: inner?.[1] }; }
+          if (lExpr.startsWith("min(")) { const inner = expr.match(/min\((\w+)\)/i); return { expr, label, idx: -1, agg: "min", col: inner?.[1] }; }
+          // CASE WHEN
+          if (lExpr.startsWith("case")) return { expr, label, idx: -1, agg: "case" };
+          return { expr, label, idx: resolveColIdx(expr), agg: null };
+        });
+      };
+
+      const selDefs = parseSelCols(selPart.replace(/TABLESAMPLE\s*\([^)]+\)/i, "").trim());
+
+      // GROUP BY
+      let groupedRows = workRows;
+      let isGrouped = false;
+      if (groupByClause) {
+        isGrouped = true;
+        const gbCols = groupByClause.split(",").map(c => c.trim());
+        const groups = {};
+        for (const row of workRows) {
+          const key = gbCols.map(gc => { const gi = resolveColIdx(gc); return gi >= 0 ? row[gi] : ""; }).join("|");
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(row);
+        }
+        // Build one result row per group
+        groupedRows = Object.values(groups).map(grpRows => {
+          return selDefs.map(sd => {
+            if (!sd.agg) { const gi = resolveColIdx(sd.expr); return gi >= 0 ? grpRows[0][gi] : ""; }
+            if (sd.agg === "count") return String(grpRows.length);
+            if (sd.agg === "countdistinct") { const ci = resolveColIdx(sd.col); const uniq = new Set(grpRows.map(r => r[ci])); return String(uniq.size); }
+            const ci = resolveColIdx(sd.col);
+            const nums = grpRows.map(r => parseFloat(r[ci]) || 0);
+            if (sd.agg === "sum") return String(nums.reduce((a, b) => a + b, 0));
+            if (sd.agg === "avg") return String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2));
+            if (sd.agg === "max") return String(Math.max(...nums));
+            if (sd.agg === "min") return String(Math.min(...nums));
+            return "";
+          });
+        });
+        // HAVING
+        if (havingClause) {
+          groupedRows = groupedRows.filter(row => {
+            const hv = applyWhere([row], selDefs.map(sd => sd.label), havingClause.trim());
+            return hv.length > 0;
+          });
+        }
+      } else if (selDefs.some(sd => sd.agg)) {
+        // Global aggregate without GROUP BY
+        const aggRow = selDefs.map(sd => {
+          if (!sd.agg) { const gi = sd.idx; return gi >= 0 ? (workRows[0]?.[gi] ?? "NULL") : "NULL"; }
+          if (sd.agg === "count") return String(workRows.length);
+          if (sd.agg === "countdistinct") { const ci = resolveColIdx(sd.col); const uniq = new Set(workRows.map(r => r[ci])); return String(uniq.size); }
+          const ci = resolveColIdx(sd.col);
+          const nums = workRows.map(r => parseFloat(r[ci]) || 0);
+          if (sd.agg === "sum") return String(nums.reduce((a, b) => a + b, 0));
+          if (sd.agg === "avg") return String((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2));
+          if (sd.agg === "max") return String(Math.max(...nums));
+          if (sd.agg === "min") return String(Math.min(...nums));
+          return "";
+        });
+        groupedRows = [aggRow];
+        isGrouped = true;
+      }
+
+      // ORDER BY
+      if (orderByClause && !isGrouped) {
+        const obM = orderByClause.match(/(\w+)(?:\s+(asc|desc))?/i);
+        if (obM) {
+          const obIdx = resolveColIdx(obM[1]);
+          const desc = (obM[2] || "asc").toLowerCase() === "desc";
+          groupedRows = [...groupedRows].sort((a, b) => { const av = a[obIdx]; const bv = b[obIdx]; const an = parseFloat(av); const bn2 = parseFloat(bv); if (!isNaN(an) && !isNaN(bn2)) return desc ? bn2 - an : an - bn2; return desc ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv)); });
+        }
+      }
+
+      // LIMIT
+      let finalRows = isGrouped ? groupedRows : groupedRows;
+      if (limitN) finalRows = finalRows.slice(0, limitN);
+
+      // Build output columns
+      let outCols, outRows;
+      if (isGrouped) {
+        outCols = selDefs.map(sd => sd.label);
+        outRows = finalRows;
+      } else {
+        outCols = selDefs.map(sd => sd.label);
+        outRows = finalRows.map(r => selDefs.map(sd => {
+          if (sd.agg === "case") {
+            // Simple CASE WHEN support
+            const caseM = sd.expr.match(/CASE\s+WHEN\s+(\w+)\s*(=|>|<|!=)\s*['"]*([^'"]*)['"]*\s+THEN\s+['"]*([^'"]*)['"]*\s+ELSE\s+['"]*([^'"]*)['"]*\s+END/i);
+            if (caseM) {
+              const ci = resolveColIdx(caseM[1]); const op = caseM[2]; const val = caseM[3]; const thenV = caseM[4]; const elseV = caseM[5];
+              const rv = r[ci]; let match = false;
+              if (op === "=") match = String(rv) == String(val);
+              else if (op === ">") match = parseFloat(rv) > parseFloat(val);
+              else if (op === "<") match = parseFloat(rv) < parseFloat(val);
+              else if (op === "!=") match = String(rv) != String(val);
+              return match ? thenV : elseV;
+            }
+            return "NULL";
+          }
+          if (sd.idx < 0) return "NULL";
+          return r[sd.idx] ?? "NULL";
+        }));
+      }
+
+      setHiveQueries(prev => [...prev, { q: cmd, db: currentHiveDB, ts: Date.now(), state: "FINISHED" }]);
+      return [out(renderTable(outCols, outRows.map(r => Array.isArray(r) ? r : [r])))];
+    }
+
+    // ══════════════════════════════
+    // UNKNOWN
+    // ══════════════════════════════
+    return [out(`Error: Comando no reconocido: '${trimmed.substring(0, 60)}'\n\nEscribe 'help' para ver comandos disponibles.\n  - Comandos HiveQL terminan en ;\n  - Meta-comandos Beeline empiezan con !`, "error")];
+  }, [beelineConnected, hiveDBs, currentHiveDB, out, appCounter, cwd, getLocalNode, resolvePath, ensureHdfsDir, hdfsFS, ensureLocalDir, processCommand, setAppCounter, setYarnApps, setHiveDBs, setHiveQueries, setCurrentHiveDB, setBeelineMode, setBeelineConnected, setLocalFS, setHdfsFS]);
 
   // ── Submit ──
   const handleSubmit = () => {
