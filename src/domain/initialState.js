@@ -1,0 +1,45 @@
+import { genNMLog, genRMLog } from "./logGenerators";
+
+export function createInitialState() {
+  const localFS = {
+    "/": { type: "dir", children: ["opt", "tmp", "home", "datos", "etc", "var", "usr", "bin", "sbin"] },
+    "/opt": { type: "dir", children: ["hadoop"] },
+    "/opt/hadoop": { type: "dir", children: ["sbin", "etc", "share", "logs", "bin", "hive"] },
+    "/opt/hadoop/hive": { type: "dir", children: ["bbdd", "conf", "lib"] },
+    "/opt/hadoop/hive/bbdd": { type: "dir", children: ["derby.log", "metastore_db"], files: { "derby.log": "----------------------------------------------------------------\nUsing Derby version 10.14.2.0\njava.vendor=Ubuntu\nos.name=Linux" } },
+    "/opt/hadoop/hive/conf": { type: "dir", children: ["hive-site.xml"], files: { "hive-site.xml": "<configuration>\n  <property>\n    <name>javax.jdo.option.ConnectionURL</name>\n    <value>jdbc:derby:;databaseName=/opt/hadoop/hive/bbdd/metastore_db;create=true</value>\n  </property>\n  <property>\n    <name>hive.server2.thrift.port</name>\n    <value>10000</value>\n  </property>\n  <property>\n    <name>hive.server2.webui.port</name>\n    <value>10002</value>\n  </property>\n</configuration>" } },
+    "/opt/hadoop/hive/lib": { type: "dir", children: ["hive-exec.jar", "hive-metastore.jar", "hive-jdbc.jar"] },
+    "/opt/hadoop/sbin": { type: "dir", children: ["start-dfs.sh", "stop-dfs.sh", "start-yarn.sh", "stop-yarn.sh"], files: { "start-dfs.sh": "#!/bin/bash\n# Start HDFS daemons", "stop-dfs.sh": "#!/bin/bash\n# Stop HDFS", "start-yarn.sh": "#!/bin/bash\n# Start YARN", "stop-yarn.sh": "#!/bin/bash\n# Stop YARN" } },
+    "/opt/hadoop/bin": { type: "dir", children: ["hadoop", "hdfs", "yarn", "mapred"] },
+    "/opt/hadoop/etc": { type: "dir", children: ["hadoop"] },
+    "/opt/hadoop/etc/hadoop": { type: "dir", children: ["core-site.xml", "hdfs-site.xml", "yarn-site.xml", "mapred-site.xml", "workers"], files: { "core-site.xml": "<configuration>\n  <property>\n    <n>fs.defaultFS</n>\n    <value>hdfs://hadoop-VirtualBox:9000</value>\n  </property>\n</configuration>", "hdfs-site.xml": "<configuration>\n  <property>\n    <n>dfs.replication</n><value>2</value>\n  </property>\n  <property>\n    <n>dfs.namenode.name.dir</n><value>file:///datos/namenode</value>\n  </property>\n  <property>\n    <n>dfs.datanode.data.dir</n><value>file:///datos/datanode</value>\n  </property>\n</configuration>", "yarn-site.xml": "<configuration>\n  <property>\n    <n>yarn.nodemanager.resource.memory-mb</n><value>4096</value>\n  </property>\n  <property>\n    <n>yarn.resourcemanager.hostname</n><value>hadoop-VirtualBox</value>\n  </property>\n</configuration>", "mapred-site.xml": "<configuration>\n  <property>\n    <n>mapreduce.framework.name</n><value>yarn</value>\n  </property>\n</configuration>", "workers": "hadoop-VirtualBox\nnodo2\nnodo3" } },
+    "/opt/hadoop/share": { type: "dir", children: ["hadoop"] },
+    "/opt/hadoop/share/hadoop": { type: "dir", children: ["mapreduce"] },
+    "/opt/hadoop/share/hadoop/mapreduce": { type: "dir", children: ["hadoop-mapreduce-examples-3.4.1.jar", "hadoop-mapreduce-client-jobclient-3.4.1-tests.jar"], files: {} },
+    "/opt/hadoop/logs": { type: "dir", children: ["hadoop-hadoop-nodemanager-hadoop-VirtualBox.log", "hadoop-hadoop-resourcemanager-hadoop-VirtualBox.log"], files: { "hadoop-hadoop-nodemanager-hadoop-VirtualBox.log": genNMLog(), "hadoop-hadoop-resourcemanager-hadoop-VirtualBox.log": genRMLog() } },
+    "/tmp": { type: "dir", children: [], files: {} },
+    "/home": { type: "dir", children: ["hadoop"] },
+    "/home/hadoop": { type: "dir", children: ["Descargas", "Documentos", "Escritorio"], files: {} },
+    "/home/hadoop/Descargas": { type: "dir", children: [], files: {} },
+    "/home/hadoop/Documentos": { type: "dir", children: [], files: {} },
+    "/home/hadoop/Escritorio": { type: "dir", children: [], files: {} },
+    "/datos": { type: "dir", children: ["namenode", "datanode"] },
+    "/datos/namenode": { type: "dir", children: ["current"] },
+    "/datos/namenode/current": { type: "dir", children: ["VERSION", "fsimage_0000000000000000042", "fsimage_0000000000000000042.md5", "edits_inprogress_0000000000000000043"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceID=1234567890\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=NAME_NODE\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-66", "fsimage_0000000000000000042": "[binary fsimage data]", "fsimage_0000000000000000042.md5": "a3f2b8c91d4e5f6a7b8c9d0e1f2a3b4c", "edits_inprogress_0000000000000000043": "[binary edits data]" } },
+    "/datos/datanode": { type: "dir", children: ["current"] },
+    "/datos/datanode/current": { type: "dir", children: ["VERSION", "BP-1234567890-127.0.0.1-1700000000000"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nstorageID=DS-abc12345-def6-7890-ghij-klmnopqrstuv\nclusterID=CID-a1b2c3d4-e5f6-7890\ncTime=0\nstorageType=DATA_NODE\nlayoutVersion=-57" } },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000": { type: "dir", children: ["current", "tmp"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current": { type: "dir", children: ["VERSION", "finalized", "rbw"], files: { "VERSION": "#\n#Mon Jan 01 08:00:00 COT 2026\nnamespaceid=1234567890\ncTime=0\nblockpoolID=BP-1234567890-127.0.0.1-1700000000000\nlayoutVersion=-57" } },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized": { type: "dir", children: ["subdir0"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0": { type: "dir", children: ["subdir0"] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/finalized/subdir0/subdir0": { type: "dir", children: [], files: {} },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/current/rbw": { type: "dir", children: [] },
+    "/datos/datanode/current/BP-1234567890-127.0.0.1-1700000000000/tmp": { type: "dir", children: [] },
+    "/etc": { type: "dir", children: ["hosts", "hostname"], files: { hosts: "127.0.0.1   localhost\n127.0.1.1   hadoop-VirtualBox\n192.168.56.10 hadoop-VirtualBox\n192.168.56.11 nodo2\n192.168.56.12 nodo3", hostname: "hadoop-VirtualBox" } },
+    "/var": { type: "dir", children: ["log"] }, "/var/log": { type: "dir", children: ["syslog"] },
+    "/usr": { type: "dir", children: ["bin", "lib"] }, "/usr/bin": { type: "dir", children: [] }, "/usr/lib": { type: "dir", children: [] },
+    "/bin": { type: "dir", children: [] }, "/sbin": { type: "dir", children: [] },
+  };
+  const hdfsFS = { "/": { type: "dir", children: [], owner: "hadoop", group: "supergroup", perms: "drwxr-xr-x" } };
+  return { localFS, hdfsFS };
+}

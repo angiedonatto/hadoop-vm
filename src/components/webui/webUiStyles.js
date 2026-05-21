@@ -1,0 +1,15 @@
+export const WS = {
+  hdr: { background: "#f8f8f8", borderBottom: "3px solid #e47a2c", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "Verdana, Geneva, sans-serif" },
+  nav: { display: "flex", gap: 0, background: "#e8e8e8", borderBottom: "1px solid #ccc", fontFamily: "Verdana, Geneva, sans-serif", fontSize: 12 },
+  navBtn: (active) => ({ padding: "7px 14px", background: active ? "#fff" : "transparent", color: active ? "#333" : "#666", border: "none", borderBottom: active ? "2px solid #e47a2c" : "2px solid transparent", cursor: "pointer", fontSize: 12, fontFamily: "Verdana, Geneva, sans-serif", fontWeight: active ? 600 : 400 }),
+  card: { background: "#fff", border: "1px solid #ddd", borderRadius: 4, padding: "10px 14px", flex: 1, minWidth: 140 },
+  cardTitle: { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
+  cardVal: { fontSize: 20, fontWeight: 700, color: "#333" },
+  tbl: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
+  th: { background: "#f0f0f0", border: "1px solid #ddd", padding: "6px 10px", textAlign: "left", fontWeight: 600, fontSize: 11, color: "#555" },
+  td: { border: "1px solid #eee", padding: "5px 10px", fontSize: 12 },
+  section: { margin: "12px 0" },
+  sTitle: { fontSize: 14, fontWeight: 600, color: "#333", borderBottom: "1px solid #ddd", paddingBottom: 4, marginBottom: 8 },
+  bar: () => ({ width: "100%", height: 18, background: "#eee", borderRadius: 3, overflow: "hidden", position: "relative", display: "flex", alignItems: "center" }),
+  barFill: (pct, color) => ({ width: `${Math.min(pct, 100)}%`, height: "100%", background: color || "#4a90d9", borderRadius: 3, transition: "width 0.3s" }),
+};

@@ -1,13 +1,7 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-// import './App.css'
-import HadoopVMSimulator from './hadoop-vm-simulator'
+import HadoopVMSimulator from "./components/HadoopVMSimulator";
 
 function App() {
-  const [count, setCount] = useState(0)
-
-  return <HadoopVMSimulator/>
+  return <HadoopVMSimulator />;
 }
 
-export default App
+export default App;
